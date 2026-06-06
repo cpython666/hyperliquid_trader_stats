@@ -157,6 +157,14 @@ hyper-stats scan-blocks --start-height 660876453 --block-count 30000 --concurren
 hyper-stats discover-leaderboard
 ```
 
+导入 Hyperdash top-traders 账户：
+
+```bash
+hyper-stats discover-hyperdash-top-traders --top-traders-file /path/to/hyperdash_top_traders.json
+```
+
+如果不传 `--top-traders-file`，命令会尝试请求 `https://hyperdash.info/api/hyperdash/top-traders-cached`；这个接口可能被 Hyperdash 风控返回 403，因此更稳的方式是先保存 JSON 文件再导入。导入时会保留 `account_value`、`main_position`、`perp_*_pnl` 等元数据到地址库或 MongoDB 地址集合。
+
 查看地址库：
 
 ```bash
@@ -180,6 +188,27 @@ hyper-stats analyze
 ```bash
 hyper-stats run --addresses 0xabc...,0xdef...
 ```
+
+## 迁移覆盖
+
+`StarDreamAPI/scripts/hyperX` 中已经迁入独立项目的核心能力：
+
+- `fetch_and_store_addresses_from_block.py` / `fetch_and_store_addresses_from_block_requests.py`：对应 `hyper-stats scan-blocks`。
+- `fetch_and_store_address.py`：对应 `hyper-stats discover-leaderboard`。
+- `fetch_and_store_addresses_from_hyperdash_top_traders.py`：对应 `hyper-stats discover-hyperdash-top-traders`。
+- `fetch_and_store_user_fills.py`、`fetch_and_store_user_state.py`、`hyper_x_utils.py` 中的 fills/state 核心逻辑：对应 `hyper-stats fetch`。
+- `compute_complete_trades.py`：对应 `hyper-stats analyze` / `run` 中的完整交易聚合和胜率统计。
+- `analyze_ls_rate.py` 的基础多空分布统计：对应报告中的 population/position distribution。
+- `analyze_analyze_result.py` 的可视化目标：对应 `data/reports/dashboard.html`。
+- 旧 MongoDB 集合读写：对应 `--storage mongo` 和 `init-mongo`。
+
+暂未完整迁入的旧脚本/辅助能力：
+
+- `add_addresses_from_vaults.py`：从旧 `web3_hyperliquid_vaults` followers 导入地址。
+- `analyze_ls_rate_over_value_pro.py`：按入场价值区间的增强多空分析与历史快照。
+- `analyze_analyze_result_pro.py` / `test/导出数据供TradingView使用.py`：增强图表和 TradingView 导出。
+- `update_high_win_rate_user_state.py` / `run_fetch_states_and_analyze.py`：按高胜率筛选后周期性更新仓位的调度流程。
+- demo、测试临时脚本、旧 PNG/XLSX 输出文件。
 
 ## 口径说明
 

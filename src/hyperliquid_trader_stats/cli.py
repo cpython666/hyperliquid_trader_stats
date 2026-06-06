@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import aiohttp
 
 from .analysis import TraderInput, analyze_population, analyze_trader
 from .api import HyperliquidClient
-from .discovery import HyperliquidDiscoveryClient, scan_blocks
+from .discovery import HyperliquidDiscoveryClient, extract_top_trader_addresses, scan_blocks
 from .mongo_store import MongoStore
 from .storage import FileStore, load_addresses
 from .visualize import render_dashboard
@@ -186,6 +187,33 @@ async def leaderboard_command(args: argparse.Namespace) -> None:
     )
 
 
+async def hyperdash_top_traders_command(args: argparse.Namespace) -> None:
+    store = build_store(args)
+    if args.top_traders_file:
+        data = json.loads(Path(args.top_traders_file).read_text(encoding="utf-8"))
+    else:
+        client = HyperliquidDiscoveryClient(hyperdash_top_traders_url=args.hyperdash_url)
+        async with aiohttp.ClientSession() as session:
+            data = await client.fetch_hyperdash_top_traders(session)
+
+    addresses, metadata_by_address, invalid_count = extract_top_trader_addresses(data)
+    stats = await maybe_await(
+        store.upsert_addresses(
+            addresses,
+            source="hyperdash_top_traders",
+            metadata_by_address=metadata_by_address,
+        )
+    )
+    logging.info(
+        "address book updated from Hyperdash top-traders: fetched=%s invalid=%s new=%s updated=%s total=%s",
+        len(addresses),
+        invalid_count,
+        stats["new"],
+        stats["updated"],
+        stats["total"],
+    )
+
+
 async def list_addresses_command(args: argparse.Namespace) -> None:
     store = build_store(args)
     records = await maybe_await(store.load_address_records())
@@ -248,6 +276,14 @@ def build_parser() -> argparse.ArgumentParser:
     leaderboard_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
     leaderboard_parser.add_argument("--leaderboard-url", default="https://stats-data.hyperliquid.xyz/Mainnet/leaderboard")
 
+    hyperdash_parser = subparsers.add_parser("discover-hyperdash-top-traders", help="Import Hyperdash top-trader accounts into the address book.")
+    hyperdash_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
+    hyperdash_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
+    hyperdash_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
+    hyperdash_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
+    hyperdash_parser.add_argument("--top-traders-file", help="Path to a Hyperdash top-traders JSON file.")
+    hyperdash_parser.add_argument("--hyperdash-url", default="https://hyperdash.info/api/hyperdash/top-traders-cached")
+
     addresses_parser = subparsers.add_parser("addresses", help="List accounts currently stored in the local address book.")
     addresses_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
     addresses_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
@@ -276,6 +312,8 @@ def main() -> None:
         asyncio.run(scan_blocks_command(args))
     elif args.command == "discover-leaderboard":
         asyncio.run(leaderboard_command(args))
+    elif args.command == "discover-hyperdash-top-traders":
+        asyncio.run(hyperdash_top_traders_command(args))
     elif args.command == "addresses":
         asyncio.run(list_addresses_command(args))
     elif args.command == "init-mongo":

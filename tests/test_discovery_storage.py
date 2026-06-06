@@ -1,6 +1,6 @@
 import json
 
-from hyperliquid_trader_stats.discovery import extract_user_addresses, is_eth_address
+from hyperliquid_trader_stats.discovery import extract_top_trader_addresses, extract_user_addresses, is_eth_address
 from hyperliquid_trader_stats.mongo_store import _completed_trade_payload
 from hyperliquid_trader_stats.storage import FileStore
 
@@ -60,6 +60,31 @@ def test_file_store_upserts_address_book(tmp_path):
     assert store.load_address_book_addresses() == ["0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"]
     assert store.address_book_csv_path.exists()
     assert store.address_book_txt_path.exists()
+
+
+def test_extract_top_trader_addresses_keeps_hyperdash_metadata():
+    data = [
+        {
+            "address": "0x8af700ba841f30e0a3fcb0ee4c4a9d223e1efa05",
+            "account_value": 16518421.685356,
+            "main_position": {"coin": "BTC", "value": 75791933.5, "side": "LONG"},
+            "direction_bias": 70.66,
+            "perp_day_pnl": 273877.442091,
+            "perp_week_pnl": 371784.312962,
+            "perp_month_pnl": 4678509.584475,
+            "perp_alltime_pnl": 45436393.265356,
+        },
+        {"address": "Leader"},
+    ]
+
+    addresses, metadata_by_address, invalid_count = extract_top_trader_addresses(data)
+
+    assert addresses == ["0x8af700ba841f30e0a3fcb0ee4c4a9d223e1efa05"]
+    assert invalid_count == 1
+    metadata = metadata_by_address[addresses[0]]
+    assert metadata["hyperdash_account_value"] == 16518421.685356
+    assert metadata["hyperdash_main_position"]["coin"] == "BTC"
+    assert metadata["hyperdash_perp_alltime_pnl"] == 45436393.265356
 
 
 def test_completed_trade_payload_keeps_legacy_mongo_fields():

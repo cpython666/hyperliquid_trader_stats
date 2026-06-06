@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 EXPLORER_URL = "https://rpc.hyperliquid.xyz/explorer"
 EXPLORER_WS_URL = "wss://rpc.hyperliquid.xyz/ws"
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
+HYPERDASH_TOP_TRADERS_URL = "https://hyperdash.info/api/hyperdash/top-traders-cached"
 ETH_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
-HEADERS = {"Content-Type": "application/json"}
+HEADERS = {"Content-Type": "application/json", "User-Agent": "hyperliquid-trader-stats/0.1.0"}
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,48 @@ def extract_user_addresses(block_data: dict[str, Any]) -> tuple[list[str], int, 
     return addresses, len(txs), invalid_count
 
 
+def _top_trader_rows(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        for key in ("top_traders", "topTraders", "traders", "data", "rows"):
+            rows = data.get(key)
+            if isinstance(rows, list):
+                return [item for item in rows if isinstance(item, dict)]
+    return []
+
+
+def extract_top_trader_addresses(data: Any) -> tuple[list[str], dict[str, dict[str, Any]], int]:
+    rows = _top_trader_rows(data)
+    addresses = []
+    metadata_by_address: dict[str, dict[str, Any]] = {}
+    invalid_count = 0
+    for row in rows:
+        raw_address = row.get("address") or row.get("ethAddress") or row.get("user")
+        if not is_eth_address(raw_address):
+            if raw_address:
+                invalid_count += 1
+            continue
+
+        address = normalize_address(raw_address)
+        addresses.append(address)
+        metadata: dict[str, Any] = {}
+        for src, dst in [
+            ("account_value", "hyperdash_account_value"),
+            ("direction_bias", "hyperdash_direction_bias"),
+            ("perp_day_pnl", "hyperdash_perp_day_pnl"),
+            ("perp_week_pnl", "hyperdash_perp_week_pnl"),
+            ("perp_month_pnl", "hyperdash_perp_month_pnl"),
+            ("perp_alltime_pnl", "hyperdash_perp_alltime_pnl"),
+        ]:
+            if row.get(src) is not None:
+                metadata[dst] = row[src]
+        if row.get("main_position") is not None:
+            metadata["hyperdash_main_position"] = row["main_position"]
+        metadata_by_address[address] = metadata
+    return addresses, metadata_by_address, invalid_count
+
+
 class HyperliquidDiscoveryClient:
     def __init__(
         self,
@@ -54,6 +97,7 @@ class HyperliquidDiscoveryClient:
         explorer_url: str = EXPLORER_URL,
         explorer_ws_url: str = EXPLORER_WS_URL,
         leaderboard_url: str = LEADERBOARD_URL,
+        hyperdash_top_traders_url: str = HYPERDASH_TOP_TRADERS_URL,
         timeout: int = 15,
         retries: int = 5,
         retry_sleep: float = 2.0,
@@ -62,6 +106,7 @@ class HyperliquidDiscoveryClient:
         self.explorer_url = explorer_url
         self.explorer_ws_url = explorer_ws_url
         self.leaderboard_url = leaderboard_url
+        self.hyperdash_top_traders_url = hyperdash_top_traders_url
         self.timeout = timeout
         self.retries = retries
         self.retry_sleep = retry_sleep
@@ -152,6 +197,19 @@ class HyperliquidDiscoveryClient:
                 logger.warning("leaderboard request error attempt=%s error=%s", attempt, exc)
             await asyncio.sleep(self.retry_sleep)
         raise RuntimeError("failed to fetch Hyperliquid leaderboard")
+
+    async def fetch_hyperdash_top_traders(self, session: aiohttp.ClientSession) -> Any:
+        for attempt in range(1, self.retries + 1):
+            try:
+                timeout = aiohttp.ClientTimeout(total=self.timeout)
+                async with session.get(self.hyperdash_top_traders_url, headers=HEADERS, timeout=timeout) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    logger.warning("Hyperdash top-traders failed status=%s attempt=%s", response.status, attempt)
+            except Exception as exc:
+                logger.warning("Hyperdash top-traders request error attempt=%s error=%s", attempt, exc)
+            await asyncio.sleep(self.retry_sleep)
+        raise RuntimeError("failed to fetch Hyperdash top-traders")
 
 
 async def scan_blocks(
