@@ -64,6 +64,87 @@ pip install -e .
 | `hyper-stats analyze-ls-rate --visualize-result` | 统计胜率与多空分布并可视化 |
 | `hyper-stats run-scheduler` | 执行当前 fetch/analyze 调度流程 |
 
+## 运行快捷命令
+
+下面每个代码块都是独立可运行命令。支持 Markdown 代码块运行按钮的编辑器，可以直接点击对应代码块运行。
+
+### 安装本地开发命令
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+python -m pip install -e .
+```
+
+### 查看命令帮助
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats --help
+```
+
+### 初始化 MongoDB 索引
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats init-db
+```
+
+### 采集排行榜地址
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats fetch-leaderboard
+```
+
+### 采集 Hyperdash 顶级交易员地址
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats fetch-hyperdash-top-traders
+```
+
+### 采集用户持仓状态
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats fetch-user-states
+```
+
+### 采集用户历史成交
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats fetch-user-fills --limit 30000 --incremental
+```
+
+### 计算已完成订单和胜率
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats compute-trades
+```
+
+### 分析胜率与多空分布
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats analyze-ls-rate --visualize-result
+```
+
+### 执行内置调度流程
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats run-scheduler
+```
+
+### 未安装 CLI 时临时运行
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+PYTHONPATH=src python -m hyperliquid_trader_stats.cli --help
+```
+
 ## 脚本说明
 ### `services/fetch_and_store_address.py`
 采集排行榜的用户地址入库

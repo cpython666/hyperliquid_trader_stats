@@ -3,6 +3,24 @@ import asyncio
 import logging
 
 
+class ChineseArgumentParser(argparse.ArgumentParser):
+    """使用中文默认帮助文案和分组标题的参数解析器。"""
+
+    def __init__(self, *args, **kwargs):
+        add_help = kwargs.pop("add_help", True)
+        super().__init__(*args, add_help=False, **kwargs)
+        self._positionals.title = "位置参数"
+        self._optionals.title = "可选参数"
+        if add_help:
+            self.add_argument(
+                "-h",
+                "--help",
+                action="help",
+                default=argparse.SUPPRESS,
+                help="显示帮助信息并退出。",
+            )
+
+
 def configure_logging(verbose: bool = False):
     """根据命令行参数初始化日志级别和输出格式。"""
     logging.basicConfig(
@@ -108,102 +126,143 @@ async def scheduler_command(_args):
 
 def build_parser():
     """构建 hyper-stats 命令行参数解析器。"""
-    parser = argparse.ArgumentParser(
+    parser = ChineseArgumentParser(
         prog="hyper-stats",
-        description="Collect and analyze Hyperliquid trader statistics.",
+        description="采集并分析 Hyperliquid 交易员数据。",
     )
-    parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
+    parser.add_argument("--verbose", action="store_true", help="输出调试级别日志。")
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(
+        dest="command",
+        metavar="命令",
+        parser_class=ChineseArgumentParser,
+        required=True,
+    )
 
-    init_db = subparsers.add_parser("init-db", help="Create MongoDB indexes.")
+    init_db = subparsers.add_parser(
+        "init-db",
+        help="初始化 MongoDB 索引。",
+        description="创建 HyperX 相关集合需要的 MongoDB 索引。",
+    )
     init_db.set_defaults(handler=init_db_command)
 
     leaderboard = subparsers.add_parser(
         "fetch-leaderboard",
-        help="Fetch leaderboard addresses into MongoDB.",
+        help="采集排行榜地址并写入 MongoDB。",
+        description="请求 Hyperliquid 排行榜接口，提取交易员地址并写入地址集合。",
     )
     leaderboard.set_defaults(handler=fetch_leaderboard_command)
 
     hyperdash = subparsers.add_parser(
         "fetch-hyperdash-top-traders",
-        help="Fetch Hyperdash top-trader addresses into MongoDB.",
+        help="采集 Hyperdash 顶级交易员地址。",
+        description="读取本地缓存或请求 Hyperdash 顶级交易员接口，筛选有效地址后入库。",
     )
     hyperdash.set_defaults(handler=fetch_hyperdash_top_traders_command)
 
     block_addresses = subparsers.add_parser(
         "fetch-block-addresses",
-        help="Fetch account addresses from explorer blocks.",
+        help="从区块中采集账户地址。",
+        description="从指定起始区块向前扫描一批 Hyperliquid explorer 区块，并保存其中的用户地址。",
     )
-    block_addresses.add_argument("start_height", type=int)
-    block_addresses.add_argument("--block-count", type=int, default=1000)
+    block_addresses.add_argument(
+        "start_height",
+        type=int,
+        help="起始区块高度，会从该高度向前扫描。",
+    )
+    block_addresses.add_argument(
+        "--block-count",
+        type=int,
+        default=1000,
+        help="向前扫描的区块数量，默认 1000。",
+    )
     block_addresses.add_argument(
         "--requests",
         action="store_true",
-        help="Use the synchronous requests-backed block fetcher.",
+        help="使用 requests 后端采集区块，适合 aiohttp 方式异常时备用。",
     )
     block_addresses.set_defaults(handler=fetch_block_addresses_command)
 
     states = subparsers.add_parser(
         "fetch-user-states",
-        help="Fetch current account state and position values.",
+        help="采集用户当前持仓状态。",
+        description="查询地址集合中缺少状态字段的用户，并更新保证金、可提现金额和有效仓位价值。",
     )
     states.add_argument(
         "--incremental",
         action=argparse.BooleanOptionalAction,
         default=True,
+        help="是否增量采集；使用 --no-incremental 可关闭。",
     )
     states.set_defaults(handler=fetch_user_states_command)
 
     fills = subparsers.add_parser(
         "fetch-user-fills",
-        help="Fetch user fills into MongoDB.",
+        help="采集用户历史成交。",
+        description="按地址批量请求 Hyperliquid userFills，并将成交记录增量写入 MongoDB。",
     )
-    fills.add_argument("--limit", type=int, default=30000)
+    fills.add_argument(
+        "--limit",
+        type=int,
+        default=30000,
+        help="最多处理的地址数量，默认 30000。",
+    )
     fills.add_argument(
         "--incremental",
         action=argparse.BooleanOptionalAction,
         default=True,
+        help="是否只处理新增地址；使用 --no-incremental 可按已有摘要全量更新。",
     )
     fills.set_defaults(handler=fetch_user_fills_command)
 
     compute = subparsers.add_parser(
         "compute-trades",
-        help="Compute completed trades and trader summaries.",
+        help="计算已完成订单和胜率摘要。",
+        description="从已保存的 fills 推算已完成订单，计算胜率、盈亏、持仓时长等交易员摘要。",
     )
     compute.add_argument(
         "--incremental",
         action=argparse.BooleanOptionalAction,
         default=True,
+        help="是否只计算未处理过的地址；使用 --no-incremental 可重新计算全部地址。",
     )
     compute.set_defaults(handler=compute_trades_command)
 
     analyze = subparsers.add_parser(
         "analyze-ls-rate",
-        help="Analyze win-rate and long/short distribution.",
+        help="分析胜率与多空分布。",
+        description="统计高胜率地址的多空人数、仓位价值和入场价值分层分布，可选择保存和绘图。",
     )
-    analyze.add_argument("--basic", action="store_true", help="Use the basic analyzer.")
+    analyze.add_argument(
+        "--basic",
+        action="store_true",
+        help="使用基础分析器，不按入场价值区间细分。",
+    )
     analyze.add_argument(
         "--store-result",
         action=argparse.BooleanOptionalAction,
         default=True,
+        help="是否将分析结果写入 MongoDB；使用 --no-store-result 可关闭。",
     )
     analyze.add_argument(
         "--visualize-result",
         action=argparse.BooleanOptionalAction,
         default=False,
+        help="是否生成可视化图表；默认不生成，传入 --visualize-result 开启。",
     )
     analyze.set_defaults(handler=analyze_ls_rate_command)
 
     update_high_winrate = subparsers.add_parser(
         "update-high-winrate-positions",
-        help="Refresh user states for high win-rate accounts.",
+        help="刷新高胜率地址持仓状态。",
+        description="筛选胜率达到阈值且状态过期的地址，并批量刷新当前持仓状态。",
     )
     update_high_winrate.set_defaults(handler=update_high_winrate_positions_command)
 
     scheduler = subparsers.add_parser(
         "run-scheduler",
-        help="Run the current fetch/analyze scheduler loop.",
+        help="运行内置调度流程。",
+        description="执行当前项目内置的高胜率地址状态刷新和胜率多空分布分析流程。",
     )
     scheduler.set_defaults(handler=scheduler_command)
 
