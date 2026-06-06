@@ -8,11 +8,19 @@ from pathlib import Path
 
 import aiohttp
 
-from .analysis import TraderInput, analyze_population, analyze_trader
+from .analysis import (
+    SUMMARY_SORT_FIELDS,
+    TraderInput,
+    analyze_population,
+    analyze_trader,
+    filter_fills_by_time,
+    parse_time_ms,
+    sort_results,
+)
 from .api import HyperliquidClient
 from .discovery import HyperliquidDiscoveryClient, extract_top_trader_addresses, scan_blocks
 from .mongo_store import MongoStore
-from .storage import FileStore, load_addresses
+from .storage import ADDRESS_SORT_FIELDS, FileStore, load_addresses, sort_address_records
 from .visualize import render_dashboard
 
 
@@ -29,6 +37,17 @@ async def maybe_await(value):
     return value
 
 
+def get_time_bounds(args: argparse.Namespace) -> tuple[int | None, int | None]:
+    try:
+        start_time_ms = parse_time_ms(getattr(args, "start_date", None))
+        end_time_ms = parse_time_ms(getattr(args, "end_date", None), end_of_day=True)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if start_time_ms is not None and end_time_ms is not None and start_time_ms > end_time_ms:
+        raise SystemExit("--start-date must be earlier than or equal to --end-date")
+    return start_time_ms, end_time_ms
+
+
 def build_store(args: argparse.Namespace):
     storage = getattr(args, "storage", "file")
     if storage == "mongo":
@@ -43,10 +62,18 @@ def build_store(args: argparse.Namespace):
 async def resolve_addresses(args: argparse.Namespace, store, *, use_cached_fills: bool = False) -> list[str]:
     addresses = load_addresses(getattr(args, "addresses", None), getattr(args, "address_file", None))
     limit = getattr(args, "limit_addresses", None)
+    address_sort = getattr(args, "address_sort", "seen_count")
+    address_sort_desc = not getattr(args, "address_sort_asc", False)
     if not addresses and use_cached_fills and isinstance(store, FileStore):
         addresses = [path.stem for path in sorted(store.fills_dir.glob("*.json"))]
     if not addresses:
-        addresses = await maybe_await(store.load_address_book_addresses(limit=limit))
+        addresses = await maybe_await(
+            store.load_address_book_addresses(
+                limit=limit,
+                sort_by=address_sort,
+                descending=address_sort_desc,
+            )
+        )
     if limit:
         addresses = addresses[:limit]
     return addresses
@@ -58,17 +85,29 @@ async def fetch_command(args: argparse.Namespace) -> None:
     if not addresses:
         raise SystemExit("No addresses provided. Use --addresses, --address-file, or scan-blocks first.")
 
+    start_date_ms, end_date_ms = get_time_bounds(args)
     client = HyperliquidClient(info_url=args.info_url, fills_url=args.fills_url)
     semaphore = asyncio.Semaphore(args.concurrency)
 
     async with aiohttp.ClientSession() as session:
         async def fetch_one(address: str) -> None:
             async with semaphore:
-                start_time = await maybe_await(store.last_fill_time(address)) if args.incremental else 0
-                logging.info("fetching %s from start_time=%s", address, start_time)
-                fills_task = client.fetch_user_fills(session, address, start_time=start_time)
+                incremental_start = await maybe_await(store.last_fill_time(address)) if args.incremental else 0
+                start_time = max(incremental_start, start_date_ms or 0)
+                logging.info("fetching %s from start_time=%s end_time=%s", address, start_time, end_date_ms)
                 state_task = client.fetch_user_state(session, address)
-                fills, state = await asyncio.gather(fills_task, state_task)
+                if end_date_ms is not None and start_time > end_date_ms:
+                    fills = []
+                    state = await state_task
+                else:
+                    fills_task = client.fetch_user_fills(
+                        session,
+                        address,
+                        start_time=start_time,
+                        end_time=end_date_ms,
+                    )
+                    fills, state = await asyncio.gather(fills_task, state_task)
+                fills = filter_fills_by_time(fills, start_time_ms=start_date_ms, end_time_ms=end_date_ms)
                 merged = await maybe_await(store.merge_save_fills(address, fills))
                 await maybe_await(
                     store.save_state(
@@ -91,9 +130,11 @@ async def analyze_command(args: argparse.Namespace) -> None:
     if not addresses:
         raise SystemExit("No cached fills found. Run fetch first or pass --addresses.")
 
+    start_date_ms, end_date_ms = get_time_bounds(args)
     results = []
     for address in addresses:
         fills = await maybe_await(store.load_fills(address))
+        fills = filter_fills_by_time(fills, start_time_ms=start_date_ms, end_time_ms=end_date_ms)
         if hasattr(store, "load_state"):
             state = await maybe_await(store.load_state(address))
         else:
@@ -120,9 +161,20 @@ async def analyze_command(args: argparse.Namespace) -> None:
             result["summary"]["net_pnl"],
         )
 
+    results = sort_results(
+        results,
+        sort_by=getattr(args, "sort_by", "win_rate_wilson_lower_bound"),
+        descending=not getattr(args, "sort_asc", False),
+    )
     population = analyze_population(results)
     paths = await maybe_await(store.export_reports(results, population))
-    dashboard_path = render_dashboard(results, population, Path(args.output))
+    dashboard_path = render_dashboard(
+        results,
+        population,
+        Path(args.output),
+        sort_by=getattr(args, "sort_by", "win_rate_wilson_lower_bound"),
+        sort_desc=not getattr(args, "sort_asc", False),
+    )
     logging.info("summary: %s", paths["summary_csv"])
     logging.info("trades: %s", paths["trades_csv"])
     logging.info("dashboard: %s", dashboard_path)
@@ -217,7 +269,11 @@ async def hyperdash_top_traders_command(args: argparse.Namespace) -> None:
 async def list_addresses_command(args: argparse.Namespace) -> None:
     store = build_store(args)
     records = await maybe_await(store.load_address_records())
-    records.sort(key=lambda item: int(item.get("seen_count", 0)), reverse=True)
+    records = sort_address_records(
+        records,
+        sort_by=args.address_sort,
+        descending=not args.address_sort_asc,
+    )
     limit = args.limit_addresses or 50
     print(f"total addresses: {len(records)}")
     for record in records[:limit]:
@@ -247,6 +303,15 @@ def build_parser() -> argparse.ArgumentParser:
     shared.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
     shared.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
     shared.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
+    shared.add_argument("--start-date", help="Inclusive fill start date/time, e.g. 2025-01-01 or 2025-01-01T00:00:00Z.")
+    shared.add_argument("--end-date", help="Inclusive fill end date/time. A date-only value includes the whole UTC day.")
+    shared.add_argument(
+        "--address-sort",
+        choices=sorted(ADDRESS_SORT_FIELDS),
+        default="seen_count",
+        help="Sort field when loading addresses from the address book.",
+    )
+    shared.add_argument("--address-sort-asc", action="store_true", help="Sort address book ascending instead of descending.")
 
     fetch_shared = argparse.ArgumentParser(add_help=False)
     fetch_shared.add_argument("--info-url", default="https://api.hyperliquid.xyz/info")
@@ -254,10 +319,19 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_shared.add_argument("--concurrency", type=int, default=3)
     fetch_shared.add_argument("--incremental", action=argparse.BooleanOptionalAction, default=True)
 
+    analyze_shared = argparse.ArgumentParser(add_help=False)
+    analyze_shared.add_argument(
+        "--sort-by",
+        choices=sorted(SUMMARY_SORT_FIELDS),
+        default="win_rate_wilson_lower_bound",
+        help="Sort field for summary.csv and dashboard.",
+    )
+    analyze_shared.add_argument("--sort-asc", action="store_true", help="Sort analysis results ascending instead of descending.")
+
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("fetch", parents=[shared, fetch_shared], help="Download fills and current positions.")
-    subparsers.add_parser("analyze", parents=[shared], help="Analyze cached fills and render reports.")
-    subparsers.add_parser("run", parents=[shared, fetch_shared], help="Fetch, analyze, and render reports.")
+    subparsers.add_parser("analyze", parents=[shared, analyze_shared], help="Analyze cached fills and render reports.")
+    subparsers.add_parser("run", parents=[shared, fetch_shared, analyze_shared], help="Fetch, analyze, and render reports.")
     scan_parser = subparsers.add_parser("scan-blocks", help="Scan Hyperliquid explorer blocks and add user accounts to the local address book.")
     scan_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
     scan_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
@@ -290,6 +364,13 @@ def build_parser() -> argparse.ArgumentParser:
     addresses_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
     addresses_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
     addresses_parser.add_argument("--limit-addresses", type=int, help="Maximum rows to print.")
+    addresses_parser.add_argument(
+        "--address-sort",
+        choices=sorted(ADDRESS_SORT_FIELDS),
+        default="seen_count",
+        help="Sort field for printed address records.",
+    )
+    addresses_parser.add_argument("--address-sort-asc", action="store_true", help="Sort address records ascending instead of descending.")
 
     init_mongo_parser = subparsers.add_parser("init-mongo", help="Create indexes for the legacy StarDreamAPI HyperX MongoDB collections.")
     init_mongo_parser.add_argument("--data-dir", default="data", help="Local report directory.")

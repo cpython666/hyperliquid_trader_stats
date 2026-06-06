@@ -48,16 +48,24 @@ def test_file_store_upserts_address_book(tmp_path):
             "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd": {"last_block_height": 90}
         },
     )
+    store.upsert_addresses(
+        ["0x1111111111111111111111111111111111111111"],
+        source="hyperdash_top_traders",
+        metadata_by_address={
+            "0x1111111111111111111111111111111111111111": {"hyperdash_account_value": 1000}
+        },
+    )
 
     records = json.loads(store.address_book_path.read_text(encoding="utf-8"))
 
     assert first == {"new": 1, "updated": 0, "total": 1}
     assert second == {"new": 0, "updated": 1, "total": 1}
-    assert records[0]["ethAddress"] == "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
-    assert records[0]["seen_count"] == 3
-    assert records[0]["sources"] == ["block_scan", "leaderboard"]
-    assert records[0]["last_block_height"] == 100
-    assert store.load_address_book_addresses() == ["0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"]
+    first_record = next(record for record in records if record["ethAddress"] == "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd")
+    assert first_record["seen_count"] == 3
+    assert first_record["sources"] == ["block_scan", "leaderboard"]
+    assert first_record["last_block_height"] == 100
+    assert store.load_address_book_addresses()[0] == "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    assert store.load_address_book_addresses(sort_by="hyperdash_account_value")[0] == "0x1111111111111111111111111111111111111111"
     assert store.address_book_csv_path.exists()
     assert store.address_book_txt_path.exists()
 

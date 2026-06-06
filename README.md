@@ -54,6 +54,12 @@ hyper-stats run --address-file addresses.txt --concurrency 3
 hyper-stats run --limit-addresses 100 --concurrency 3
 ```
 
+按日期范围下载、分析并排序：
+
+```bash
+hyper-stats run --limit-addresses 100 --start-date 2025-01-01 --end-date 2025-01-31 --sort-by net_pnl
+```
+
 生成结果：
 
 - `data/addresses.json`：扫链/排行榜发现的账户地址库
@@ -106,6 +112,12 @@ hyper-stats analyze --storage mongo --limit-addresses 100
 
 ```bash
 hyper-stats run --storage mongo --limit-addresses 100 --concurrency 3
+```
+
+按旧地址集合里的账户价值优先处理：
+
+```bash
+hyper-stats run --storage mongo --limit-addresses 100 --address-sort account_value --concurrency 3
 ```
 
 扫链写入旧 MongoDB 地址集合：
@@ -189,6 +201,37 @@ hyper-stats analyze
 hyper-stats run --addresses 0xabc...,0xdef...
 ```
 
+## 日期筛选和排序
+
+日期筛选支持 `fetch`、`analyze` 和 `run`：
+
+```bash
+hyper-stats fetch --address-file addresses.txt --start-date 2025-01-01 --end-date 2025-01-31
+hyper-stats analyze --start-date 2025-01-01 --end-date 2025-01-31 --sort-by win_rate
+```
+
+- `--start-date`、`--end-date` 都是包含边界的筛选条件。
+- 只写日期时按 UTC 日期处理，例如 `--end-date 2025-01-31` 会包含 `2025-01-31` 当天所有 fills。
+- 也可以传 ISO 时间，例如 `2025-01-01T08:00:00Z` 或带时区偏移的时间。
+- 纯数字支持秒级或毫秒级时间戳。
+
+结果排序支持 `analyze` 和 `run`：
+
+```bash
+hyper-stats analyze --sort-by win_rate_wilson_lower_bound
+hyper-stats analyze --sort-by net_pnl
+hyper-stats analyze --sort-by total_trades --sort-asc
+```
+
+地址库排序用于决定批量抓取/分析时先处理哪些地址，支持本地地址库和旧 MongoDB：
+
+```bash
+hyper-stats run --address-sort seen_count
+hyper-stats run --address-sort account_value
+hyper-stats run --address-sort abs_effective_position_value
+hyper-stats addresses --address-sort last_block_height --limit-addresses 30
+```
+
 ## 迁移覆盖
 
 `StarDreamAPI/scripts/hyperX` 中已经迁入独立项目的核心能力：
@@ -201,6 +244,7 @@ hyper-stats run --addresses 0xabc...,0xdef...
 - `analyze_ls_rate.py` 的基础多空分布统计：对应报告中的 population/position distribution。
 - `analyze_analyze_result.py` 的可视化目标：对应 `data/reports/dashboard.html`。
 - 旧 MongoDB 集合读写：对应 `--storage mongo` 和 `init-mongo`。
+- 旧脚本里的 `lastTime` 增量采集、fills 时间排序、地址按账户/仓位价值优先处理：对应 `--incremental`、`--start-date` / `--end-date`、`--address-sort` 和 `--sort-by`。
 
 暂未完整迁入的旧脚本/辅助能力：
 

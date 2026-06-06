@@ -69,6 +69,7 @@ class HyperliquidClient:
         address: str,
         *,
         start_time: int = 0,
+        end_time: int | None = None,
         aggregate_by_time: bool = True,
         page_size_stop: int = 2000,
     ) -> list[dict[str, Any]]:
@@ -83,6 +84,8 @@ class HyperliquidClient:
                 "startTime": current_start_time,
                 "aggregateByTime": aggregate_by_time,
             }
+            if end_time is not None:
+                payload["endTime"] = end_time
             data = await self._post(session, self.fills_url, payload)
             fills = data.get("fills", []) if isinstance(data, dict) else data
             if not isinstance(fills, list):
@@ -90,6 +93,9 @@ class HyperliquidClient:
 
             new_fills = []
             for fill in fills:
+                fill_time = int(fill.get("time", 0) or 0)
+                if end_time is not None and fill_time > end_time:
+                    continue
                 tid = fill.get("tid")
                 if tid in seen_tids:
                     continue
@@ -102,6 +108,8 @@ class HyperliquidClient:
 
             next_start_time = fills[-1].get("time")
             if next_start_time is None or next_start_time == current_start_time:
+                return sorted(all_fills, key=lambda item: item.get("time", 0))
+            if end_time is not None and int(next_start_time) >= end_time:
                 return sorted(all_fills, key=lambda item: item.get("time", 0))
             current_start_time = int(next_start_time)
 

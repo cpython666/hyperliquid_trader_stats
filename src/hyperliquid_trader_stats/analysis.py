@@ -4,7 +4,7 @@ import math
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -15,6 +15,24 @@ class TraderInput:
     fills: list[dict[str, Any]]
     open_position_coins: list[str]
     effective_position_value: float | None = None
+
+
+SUMMARY_SORT_FIELDS = {
+    "address",
+    "total_trades",
+    "winning_trades",
+    "win_rate",
+    "win_rate_score",
+    "win_rate_wilson_lower_bound",
+    "win_rate_long",
+    "win_rate_short",
+    "gross_pnl",
+    "fees",
+    "net_pnl",
+    "avg_duration_minutes",
+    "median_duration_minutes",
+    "effective_position_value",
+}
 
 
 def decimal2(value: Decimal) -> float:
@@ -47,6 +65,75 @@ def _direction(fill: dict[str, Any]) -> str:
     if "Short" in direction:
         return "Short"
     return direction or "Unknown"
+
+
+def parse_time_ms(value: str | int | None, *, end_of_day: bool = False) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value * 1000 if value < 10_000_000_000 else value
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        number = int(raw)
+        return number * 1000 if number < 10_000_000_000 else number
+
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Invalid date/time value: {value!r}") from exc
+
+    if "T" not in normalized and len(normalized) == 10 and end_of_day:
+        parsed = datetime.combine(parsed.date(), time.max)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
+
+
+def filter_fills_by_time(
+    fills: list[dict[str, Any]],
+    *,
+    start_time_ms: int | None = None,
+    end_time_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    filtered = []
+    for fill in fills:
+        fill_time = int(fill.get("time", 0) or 0)
+        if start_time_ms is not None and fill_time < start_time_ms:
+            continue
+        if end_time_ms is not None and fill_time > end_time_ms:
+            continue
+        filtered.append(fill)
+    return sorted(filtered, key=lambda item: item.get("time", 0))
+
+
+def sort_results(
+    results: list[dict[str, Any]],
+    *,
+    sort_by: str = "win_rate_wilson_lower_bound",
+    descending: bool = True,
+) -> list[dict[str, Any]]:
+    if sort_by not in SUMMARY_SORT_FIELDS:
+        raise ValueError(f"Unsupported sort field: {sort_by}")
+
+    def sort_value(result: dict[str, Any]) -> tuple[Any, float, int, str]:
+        summary = result.get("summary", {})
+        primary = summary.get(sort_by)
+        if sort_by == "address":
+            primary = str(primary or "")
+        else:
+            primary = float(primary or 0)
+        return (
+            primary,
+            float(summary.get("net_pnl") or 0),
+            int(summary.get("total_trades") or 0),
+            str(summary.get("address") or ""),
+        )
+
+    return sorted(results, key=sort_value, reverse=descending)
 
 
 def merge_fills_to_completed_trades(

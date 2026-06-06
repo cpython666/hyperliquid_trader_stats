@@ -9,8 +9,74 @@ from typing import Any
 import pandas as pd
 
 
+ADDRESS_SORT_FIELDS = {
+    "seen_count",
+    "last_seen_at",
+    "last_block_height",
+    "account_value",
+    "effective_position_value",
+    "abs_effective_position_value",
+    "hyperdash_account_value",
+    "ethAddress",
+}
+
+
 def safe_address(address: str) -> str:
     return address.lower().strip()
+
+
+def _nested_number(record: dict[str, Any], *path: str) -> float:
+    current: Any = record
+    for key in path:
+        if not isinstance(current, dict):
+            return 0.0
+        current = current.get(key)
+    try:
+        return float(current or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _address_sort_value(record: dict[str, Any], sort_by: str) -> Any:
+    if sort_by == "account_value":
+        return (
+            _nested_number(record, "marginSummary", "accountValue")
+            or _nested_number(record, "accountValue")
+            or _nested_number(record, "hyperdash_account_value")
+        )
+    if sort_by == "hyperdash_account_value":
+        return _nested_number(record, "hyperdash_account_value")
+    if sort_by == "effective_position_value":
+        return _nested_number(record, "effective_position_value")
+    if sort_by == "abs_effective_position_value":
+        return abs(_nested_number(record, "effective_position_value"))
+    if sort_by in {"seen_count", "last_block_height"}:
+        return _nested_number(record, sort_by)
+    if sort_by == "last_seen_at":
+        return str(record.get("last_seen_at") or record.get("updated_at") or "")
+    if sort_by == "ethAddress":
+        return str(record.get("ethAddress") or "")
+    return 0
+
+
+def sort_address_records(
+    records: list[dict[str, Any]],
+    *,
+    sort_by: str = "seen_count",
+    descending: bool = True,
+) -> list[dict[str, Any]]:
+    if sort_by not in ADDRESS_SORT_FIELDS:
+        raise ValueError(f"Unsupported address sort field: {sort_by}")
+
+    def key(record: dict[str, Any]) -> tuple[Any, float, str, str]:
+        return (
+            _address_sort_value(record, sort_by),
+            _nested_number(record, "seen_count"),
+            str(record.get("last_seen_at") or record.get("updated_at") or ""),
+            str(record.get("ethAddress") or ""),
+        )
+
+    return sorted(records, key=key, reverse=descending)
 
 
 class FileStore:
@@ -102,15 +168,15 @@ class FileStore:
         self.save_address_records(list(records_by_address.values()))
         return {"new": new_count, "updated": updated_count, "total": len(records_by_address)}
 
-    def load_address_book_addresses(self, *, limit: int | None = None) -> list[str]:
+    def load_address_book_addresses(
+        self,
+        *,
+        limit: int | None = None,
+        sort_by: str = "seen_count",
+        descending: bool = True,
+    ) -> list[str]:
         records = self.load_address_records()
-        records.sort(
-            key=lambda item: (
-                int(item.get("seen_count", 0)),
-                item.get("last_seen_at", ""),
-            ),
-            reverse=True,
-        )
+        records = sort_address_records(records, sort_by=sort_by, descending=descending)
         addresses = [record["ethAddress"] for record in records if record.get("ethAddress")]
         return addresses[:limit] if limit else addresses
 

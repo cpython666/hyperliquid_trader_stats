@@ -9,7 +9,14 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-def render_dashboard(results: list[dict[str, Any]], population: dict[str, Any], output: str | Path) -> Path:
+def render_dashboard(
+    results: list[dict[str, Any]],
+    population: dict[str, Any],
+    output: str | Path,
+    *,
+    sort_by: str = "win_rate_wilson_lower_bound",
+    sort_desc: bool = True,
+) -> Path:
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     summary = pd.DataFrame([result["summary"] for result in results])
@@ -22,7 +29,8 @@ def render_dashboard(results: list[dict[str, Any]], population: dict[str, Any], 
         output_path.write_text(html, encoding="utf-8")
         return output_path
 
-    summary = summary.sort_values(["win_rate_wilson_lower_bound", "net_pnl"], ascending=False)
+    sort_columns = [column for column in [sort_by, "net_pnl", "total_trades"] if column in summary.columns]
+    summary = summary.sort_values(sort_columns, ascending=not sort_desc, na_position="last")
     top = summary.head(50).copy()
     top["short_address"] = top["address"].str.slice(0, 8) + "..." + top["address"].str.slice(-6)
 

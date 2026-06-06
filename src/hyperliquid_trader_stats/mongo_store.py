@@ -5,7 +5,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
-from .storage import FileStore, safe_address
+from .storage import FileStore, safe_address, sort_address_records
 
 ADDRESSES_COLLECTION = "web3_hyperliquid_hyper_x_addresses"
 USER_FILLS_COLLECTION = "web3_hyperliquid_hyper_x_user_fills"
@@ -194,12 +194,17 @@ class MongoStore:
             "total": total,
         }
 
-    async def load_address_book_addresses(self, *, limit: int | None = None) -> list[str]:
-        cursor = self.addresses.find({"ethAddress": {"$exists": True}}, {"ethAddress": 1, "_id": 0})
-        cursor = cursor.sort([("seen_count", -1), ("marginSummary.accountValue", -1), ("effective_position_value", -1)])
-        if limit:
-            cursor = cursor.limit(limit)
-        return [doc["ethAddress"] async for doc in cursor if doc.get("ethAddress")]
+    async def load_address_book_addresses(
+        self,
+        *,
+        limit: int | None = None,
+        sort_by: str = "seen_count",
+        descending: bool = True,
+    ) -> list[str]:
+        records = await self.load_address_records()
+        records = sort_address_records(records, sort_by=sort_by, descending=descending)
+        addresses = [record["ethAddress"] for record in records if record.get("ethAddress")]
+        return addresses[:limit] if limit else addresses
 
     async def load_fills(self, address: str) -> list[dict[str, Any]]:
         cursor = self.user_fills.find({"ethAddress": address}, {"fill": 1, "_id": 0}).sort("time", 1)
