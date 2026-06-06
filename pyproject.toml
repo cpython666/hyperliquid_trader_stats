@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyperliquid-trader-stats"
+version = "0.1.0"
+description = "Download Hyperliquid account fills, compute trader win rates, and render dashboards."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "aiohttp>=3.9",
+    "pandas>=2.2",
+    "plotly>=5.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+hyper-stats = "hyperliquid_trader_stats.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

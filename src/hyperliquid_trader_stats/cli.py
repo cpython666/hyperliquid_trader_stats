@@ -1,0 +1,240 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+from pathlib import Path
+
+import aiohttp
+
+from .analysis import TraderInput, analyze_population, analyze_trader
+from .api import HyperliquidClient
+from .discovery import HyperliquidDiscoveryClient, scan_blocks
+from .storage import FileStore, load_addresses
+from .visualize import render_dashboard
+
+
+def configure_logging(verbose: bool = False) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
+
+
+def resolve_addresses(args: argparse.Namespace, store: FileStore, *, use_cached_fills: bool = False) -> list[str]:
+    addresses = load_addresses(getattr(args, "addresses", None), getattr(args, "address_file", None))
+    limit = getattr(args, "limit_addresses", None)
+    if not addresses and use_cached_fills:
+        addresses = [path.stem for path in sorted(store.fills_dir.glob("*.json"))]
+    if not addresses:
+        addresses = store.load_address_book_addresses(limit=limit)
+    if limit:
+        addresses = addresses[:limit]
+    return addresses
+
+
+async def fetch_command(args: argparse.Namespace) -> None:
+    store = FileStore(args.data_dir)
+    addresses = resolve_addresses(args, store)
+    if not addresses:
+        raise SystemExit("No addresses provided. Use --addresses, --address-file, or scan-blocks first.")
+
+    client = HyperliquidClient(info_url=args.info_url, fills_url=args.fills_url)
+    semaphore = asyncio.Semaphore(args.concurrency)
+
+    async with aiohttp.ClientSession() as session:
+        async def fetch_one(address: str) -> None:
+            async with semaphore:
+                start_time = store.last_fill_time(address) if args.incremental else 0
+                logging.info("fetching %s from start_time=%s", address, start_time)
+                fills_task = client.fetch_user_fills(session, address, start_time=start_time)
+                state_task = client.fetch_user_state(session, address)
+                fills, state = await asyncio.gather(fills_task, state_task)
+                merged = store.merge_save_fills(address, fills)
+                store.save_state(
+                    address,
+                    {
+                        "raw": state.raw,
+                        "open_position_coins": state.open_position_coins,
+                        "effective_position_value": state.effective_position_value,
+                    },
+                )
+                logging.info("saved %s fills for %s (%s new)", len(merged), address, len(fills))
+
+        await asyncio.gather(*(fetch_one(address) for address in addresses))
+
+
+def analyze_command(args: argparse.Namespace) -> None:
+    store = FileStore(args.data_dir)
+    addresses = resolve_addresses(args, store, use_cached_fills=True)
+    if not addresses:
+        raise SystemExit("No cached fills found. Run fetch first or pass --addresses.")
+
+    results = []
+    for address in addresses:
+        fills = store.load_fills(address)
+        state = {}
+        state_path = store.state_path(address)
+        if state_path.exists():
+            import json
+
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        trader = TraderInput(
+            address=address,
+            fills=fills,
+            open_position_coins=state.get("open_position_coins", []),
+            effective_position_value=state.get("effective_position_value"),
+        )
+        result = analyze_trader(trader)
+        store.save_result(address, result)
+        results.append(result)
+        logging.info(
+            "analyzed %s trades=%s win_rate=%s net_pnl=%s",
+            address,
+            result["summary"]["total_trades"],
+            result["summary"]["win_rate"],
+            result["summary"]["net_pnl"],
+        )
+
+    population = analyze_population(results)
+    paths = store.export_reports(results, population)
+    dashboard_path = render_dashboard(results, population, Path(args.output))
+    logging.info("summary: %s", paths["summary_csv"])
+    logging.info("trades: %s", paths["trades_csv"])
+    logging.info("dashboard: %s", dashboard_path)
+
+
+async def run_command(args: argparse.Namespace) -> None:
+    await fetch_command(args)
+    analyze_command(args)
+
+
+async def scan_blocks_command(args: argparse.Namespace) -> None:
+    store = FileStore(args.data_dir)
+    client = HyperliquidDiscoveryClient(
+        explorer_url=args.explorer_url,
+        explorer_ws_url=args.explorer_ws_url,
+    )
+    start_height = args.start_height
+    if start_height is None:
+        logging.info("fetching latest Hyperliquid explorer block height")
+        start_height = await client.get_latest_block_height()
+    logging.info("scanning blocks start_height=%s block_count=%s", start_height, args.block_count)
+
+    results = await scan_blocks(
+        client,
+        start_height=start_height,
+        block_count=args.block_count,
+        concurrency=args.concurrency,
+    )
+    addresses = []
+    metadata_by_address = {}
+    for result in results:
+        for address in result.addresses:
+            addresses.append(address)
+            metadata_by_address[address] = {
+                "last_block_height": max(
+                    result.height,
+                    int(metadata_by_address.get(address, {}).get("last_block_height", 0)),
+                )
+            }
+    stats = store.upsert_addresses(addresses, source="block_scan", metadata_by_address=metadata_by_address)
+    logging.info(
+        "address book updated: new=%s updated=%s total=%s files=%s",
+        stats["new"],
+        stats["updated"],
+        stats["total"],
+        store.address_book_path,
+    )
+
+
+async def leaderboard_command(args: argparse.Namespace) -> None:
+    store = FileStore(args.data_dir)
+    client = HyperliquidDiscoveryClient(leaderboard_url=args.leaderboard_url)
+    async with aiohttp.ClientSession() as session:
+        addresses = await client.fetch_leaderboard_addresses(session)
+    stats = store.upsert_addresses(addresses, source="leaderboard")
+    logging.info(
+        "address book updated from leaderboard: fetched=%s new=%s updated=%s total=%s",
+        len(addresses),
+        stats["new"],
+        stats["updated"],
+        stats["total"],
+    )
+
+
+def list_addresses_command(args: argparse.Namespace) -> None:
+    store = FileStore(args.data_dir)
+    records = store.load_address_records()
+    records.sort(key=lambda item: int(item.get("seen_count", 0)), reverse=True)
+    limit = args.limit_addresses or 50
+    print(f"total addresses: {len(records)}")
+    for record in records[:limit]:
+        sources = ",".join(record.get("sources", []))
+        print(f"{record.get('ethAddress')} seen={record.get('seen_count', 0)} sources={sources}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="hyper-stats",
+        description="Download Hyperliquid account fills, calculate win rates, and render a dashboard.",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logs.")
+
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--addresses", help="Comma-separated addresses.")
+    shared.add_argument("--address-file", help="Text/CSV/JSON file containing addresses.")
+    shared.add_argument("--data-dir", default="data", help="Local cache directory.")
+    shared.add_argument("--output", default="data/reports/dashboard.html", help="Dashboard HTML output path.")
+    shared.add_argument("--limit-addresses", type=int, help="Limit addresses loaded from args, file, or address book.")
+
+    fetch_shared = argparse.ArgumentParser(add_help=False)
+    fetch_shared.add_argument("--info-url", default="https://api.hyperliquid.xyz/info")
+    fetch_shared.add_argument("--fills-url", default="https://api-ui.hyperliquid.xyz/info")
+    fetch_shared.add_argument("--concurrency", type=int, default=3)
+    fetch_shared.add_argument("--incremental", action=argparse.BooleanOptionalAction, default=True)
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("fetch", parents=[shared, fetch_shared], help="Download fills and current positions.")
+    subparsers.add_parser("analyze", parents=[shared], help="Analyze cached fills and render reports.")
+    subparsers.add_parser("run", parents=[shared, fetch_shared], help="Fetch, analyze, and render reports.")
+    scan_parser = subparsers.add_parser("scan-blocks", help="Scan Hyperliquid explorer blocks and add user accounts to the local address book.")
+    scan_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
+    scan_parser.add_argument("--start-height", type=int, help="Start block height. Defaults to latest explorer block.")
+    scan_parser.add_argument("--block-count", type=int, default=1000, help="Number of blocks to scan backwards.")
+    scan_parser.add_argument("--concurrency", type=int, default=5, help="Concurrent block requests.")
+    scan_parser.add_argument("--explorer-url", default="https://rpc.hyperliquid.xyz/explorer")
+    scan_parser.add_argument("--explorer-ws-url", default="wss://rpc.hyperliquid.xyz/ws")
+
+    leaderboard_parser = subparsers.add_parser("discover-leaderboard", help="Import Hyperliquid leaderboard accounts into the local address book.")
+    leaderboard_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
+    leaderboard_parser.add_argument("--leaderboard-url", default="https://stats-data.hyperliquid.xyz/Mainnet/leaderboard")
+
+    addresses_parser = subparsers.add_parser("addresses", help="List accounts currently stored in the local address book.")
+    addresses_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
+    addresses_parser.add_argument("--limit-addresses", type=int, help="Maximum rows to print.")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    configure_logging(args.verbose)
+    if args.command == "fetch":
+        asyncio.run(fetch_command(args))
+    elif args.command == "analyze":
+        analyze_command(args)
+    elif args.command == "run":
+        asyncio.run(run_command(args))
+    elif args.command == "scan-blocks":
+        asyncio.run(scan_blocks_command(args))
+    elif args.command == "discover-leaderboard":
+        asyncio.run(leaderboard_command(args))
+    elif args.command == "addresses":
+        list_addresses_command(args)
+    else:
+        parser.error(f"unknown command: {args.command}")
+
+
+if __name__ == "__main__":
+    main()
