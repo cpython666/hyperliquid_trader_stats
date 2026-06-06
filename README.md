@@ -1,285 +1,116 @@
-# Hyperliquid Trader Stats
+## 集合介绍
+### web3_hyperliquid_hyper_x_addresses
+地址表 记录所有用户地址
+![web3_hyperliquid_hyper_x_addresses.png](/imgs/web3_hyperliquid_hyper_x_addresses.png)
 
-从 Hyperliquid 下载一批账户的成交记录，聚合完整交易，统计每个地址的胜率，并生成 CSV 与可视化 HTML 报告。
 
-这个项目是从 `StarDreamAPI/scripts/hyperX` 相关逻辑拆出来的独立版本：
+| 字段        | 类型   | 描述                 |
+|------------|--------|----------------------|
+| ethAddress | String | 用户地址             |
 
-- 不依赖原项目的 FastAPI、MongoDB、scheduler。
-- 使用本地 `data/` 目录保存地址库、fills、仓位状态和分析结果。
-- 保留原来的核心思路：按 `coin + startPosition=0` 聚合完整交易，用净盈亏 `net_pnl > 0` 计算胜率。
-- 输出 `summary.csv`、`trades.csv`、`per_asset.csv`、`population.json` 和 `dashboard.html`。
 
-## 安装
 
-```bash
-cd /Users/cpython666/git_pro/hyperliquid-trader-stats
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
+### web3_hyperliquid_hyper_x_user_fills_summary
 
-如果要直接读写旧项目的 MongoDB：
-
-```bash
-pip install -e ".[dev,mongo]"
-```
-
-## 准备地址
-
-建一个文本文件，例如 `addresses.txt`：
-
-```text
-0x0000000000000000000000000000000000000000
-0x1111111111111111111111111111111111111111
-```
-
-也支持 CSV 第一列或 JSON list：
-
-```json
+```javascript
 [
-  "0x0000000000000000000000000000000000000000",
-  {"ethAddress": "0x1111111111111111111111111111111111111111"}
+  {
+    "_id": ObjectId("686694116fc51490b88ff79f"),
+    "ethAddress": "0x3cdd67815474d517fa95f0d827c3d0fe2dcbe7b1",
+    "lastTime": NumberLong("1746639736599"),
+    "updatedAt": ISODate("2025-07-03T14:28:34.467Z")
+}
+  ...
 ]
 ```
+冗余表 记录每个地址和fills表中记录的最后订单的时间戳
+| 字段        | 类型   | 描述                 |
+|------------|--------|----------------------|
+| ethAddress | String | 用户地址             |
+| lastTime   | Date   | 记录的最后订单时间戳 |
+| updatedAt  | Date   | 记录更新时间         |
 
-## 一键下载、统计、可视化
+## 项目结构
 
-```bash
-hyper-stats run --address-file addresses.txt --concurrency 3
-```
+核心代码已放到 `src/hyperliquid_trader_stats`：
 
-如果已经用扫链命令生成了地址库，可以不传 `--address-file`：
+| 目录 | 作用 |
+| ---- | ---- |
+| `api/` | 请求工具与浏览器辅助请求 |
+| `analytics/` | 已完成订单计算、胜率统计等核心分析逻辑 |
+| `db/` | MongoDB 集合与索引初始化 |
+| `plotting/` | 分析结果可视化与导出 |
+| `services/` | 地址、状态、fills、金库等采集/同步流程 |
 
-```bash
-hyper-stats run --limit-addresses 100 --concurrency 3
-```
+## 命令行入口
 
-按日期范围下载、分析并排序：
-
-```bash
-hyper-stats run --limit-addresses 100 --start-date 2025-01-01 --end-date 2025-01-31 --sort-by net_pnl
-```
-
-生成结果：
-
-- `data/addresses.json`：扫链/排行榜发现的账户地址库
-- `data/addresses.csv`：地址库 CSV 版本
-- `data/addresses.txt`：地址库纯地址列表
-- `data/fills/<address>.json`：原始成交记录缓存
-- `data/states/<address>.json`：当前持仓状态缓存
-- `data/results/<address>.json`：单地址分析结果
-- `data/reports/summary.csv`：每个地址胜率排行
-- `data/reports/trades.csv`：聚合后的完整交易明细
-- `data/reports/per_asset.csv`：按币种统计
-- `data/reports/dashboard.html`：可视化报告
-
-打开报告：
+安装开发环境后可以使用：
 
 ```bash
-open data/reports/dashboard.html
+pip install -e .
 ```
 
-## 分步运行
+常用命令：
 
-### 使用旧 MongoDB
+| 命令 | 作用 |
+| ---- | ---- |
+| `hyper-stats init-db` | 初始化 HyperX 相关 MongoDB 索引 |
+| `hyper-stats fetch-leaderboard` | 采集排行榜用户地址入库 |
+| `hyper-stats fetch-hyperdash-top-traders` | 采集 Hyperdash top trader 地址入库 |
+| `hyper-stats fetch-block-addresses <start_height>` | 从区块中采集地址 |
+| `hyper-stats fetch-user-states` | 采集用户持仓状态 |
+| `hyper-stats fetch-user-fills --limit 30000 --incremental` | 获取用户历史成交 |
+| `hyper-stats compute-trades` | 计算已完成订单与胜率摘要 |
+| `hyper-stats analyze-ls-rate --visualize-result` | 统计胜率与多空分布并可视化 |
+| `hyper-stats run-scheduler` | 执行当前 fetch/analyze 调度流程 |
 
-默认情况下项目只读写本地 `data/` 目录，不会连接 MongoDB。要使用 `StarDreamAPI` 之前的 MongoDB，需要显式选择 `--storage mongo`，并通过环境变量或命令行传入连接信息：
+## 脚本说明
+### `services/fetch_and_store_address.py`
+采集排行榜的用户地址入库
 
-```bash
-export MONGODB_URL="<your MongoDB connection string>"
-export MONGODB_DB_NAME="<your MongoDB database name>"
-```
+### `services/fetch_and_store_user_state.py`
+查询到没有有效字段的地址，请求仓位信息，计算出一些字段比如有效仓位等，更新到数据库
 
-也可以在项目根目录创建本地 `.env`，命令运行时会自动读取：
+### 从金库获取地址
 
-```bash
-cp .env.example .env
-```
+`services/vaults/fetch_and_store_vaults_list.py`
+`services/vaults/fetch_and_store_vaults_info.py`
+`services/add_addresses_from_vaults.py`
 
-然后编辑 `.env`：
+| 脚本                          | 作用                         | 完成 |
+| ----------------------------- | ---------------------------- | ---- |
+| `services/add_addresses_from_vaults.py` | 采集金库的存款用户地址入库 | ✅ |
+| `services/fetch_and_store_user_state.py` | 采集用户持仓信息 | ✅ |
+| `services/fetch_and_store_user_fills.py` | 获取用户历史成交 | ✅ |
+| `plotting/analyze_ls_rate.py` | 统计胜率与多空分布并可视化 | ✅ |
+| `plotting/analyze_ls_rate_over_value_pro.py` | 按入场价值区间细分胜率与多空分布 | ✅ |
+| `plotting/analyze_analyze_result.py` | 按时间可视化已存储结果（2图） | ✅ |
+| `plotting/analyze_analyze_result_pro.py` | 按类型/汇总可视化已存储结果 | ✅ |
+| `services/run_fetch_states_and_analyze.py` | 定时执行当前采集/分析流程 | ✅ |
 
-```text
-MONGODB_URL="<your MongoDB connection string>"
-MONGODB_DB_NAME="<your MongoDB database name>"
-```
+### 分析脚本说明
+- `analyze_ls_rate.py`
+  - 从地址与交易集合统计胜率分布（≥50/60/70/80/90）与多空仓位分布。
+  - 输出 `winrate_distribution` 与 `position_distribution`，包含数量、价值总和、`ratio` 与 `value_ratio`。
+  - 可选存储到 `web3_hyperliquid_hyper_x_analyze_result_collection`，并生成多张图（饼图、柱状图、折线图）。
+- `analyze_ls_rate_over_value_pro.py`
+  - 在上述基础上，按入场价值区间（`entry_value_summary` 的 `win_rate_over_1w/10w/100w/1000w`）进一步细分统计。
+  - 额外输出 `value_position_distribution`，同样包含数量、价值总和与比值。
+  - 可视化采用合并大图（2x2）保存到 `plots_tmp`，更适合总览对比。
+- `analyze_analyze_result.py`
+  - 读取已存储的分析结果集合，按时间绘制两张折线图：人数比 `ratio` 与价值比 `value_ratio`。
+  - 支持导出 Excel（`analyze_result.xlsx`），便于二次分析与分享。
+- `analyze_analyze_result_pro.py`
+  - 读取已存储结果，支持两种模式：
+    - `group`：按 `type`（如 `total`、`win_rate_over_1w/10w/100w/1000w`）逐组输出两图。
+    - `big`：将所有 `type` 合并到两张大图（人数比与价值比，各 2x3 子图）。
+  - 适合对 `position_distribution` 与 `value_position_distribution` 做更细致的时间序列对比。
 
-`.env` 已经在 `.gitignore` 中，不会提交到公开仓库。
+## 需采集数据
+- 地址历史操作数据，fills
+- k线数据
+- 区块数据
+- 金库数据
 
-初始化旧集合索引：
-
-```bash
-hyper-stats init-mongo --mongo-uri "$MONGODB_URL" --mongo-db "$MONGODB_DB_NAME"
-```
-
-从旧 MongoDB 地址集合读取账户并下载 fills：
-
-```bash
-hyper-stats fetch --storage mongo --limit-addresses 100 --concurrency 3
-```
-
-分析旧 MongoDB 中已有的 fills，并把结果写回旧格式集合：
-
-```bash
-hyper-stats analyze --storage mongo --limit-addresses 100
-```
-
-一键下载并分析：
-
-```bash
-hyper-stats run --storage mongo --limit-addresses 100 --concurrency 3
-```
-
-按旧地址集合里的账户价值优先处理：
-
-```bash
-hyper-stats run --storage mongo --limit-addresses 100 --address-sort account_value --concurrency 3
-```
-
-扫链写入旧 MongoDB 地址集合：
-
-```bash
-hyper-stats scan-blocks --storage mongo --block-count 1000 --concurrency 5
-```
-
-查看旧 MongoDB 地址集合：
-
-```bash
-hyper-stats addresses --storage mongo --limit-addresses 30
-```
-
-兼容的旧集合名：
-
-- `web3_hyperliquid_hyper_x_addresses`
-- `web3_hyperliquid_hyper_x_user_fills`
-- `web3_hyperliquid_hyper_x_user_fills_summary`
-- `web3_hyperliquid_hyper_x_completed_trades`
-- `web3_hyperliquid_hyper_x_trade_summary`
-- `web3_hyperliquid_hyper_x_analyze_result`
-
-MongoDB 模式下写入字段会保留旧项目口径：
-
-- 地址集合使用 `ethAddress`，并兼容旧的 `source`、`created_at`、`createdAt` 字段。
-- fills 集合使用 `ethAddress + tid` 唯一键，成交原文写在 `fill` 字段，同时冗余 `coin`、`time`。
-- fills summary 集合使用 `ethAddress`、`lastTime`、`updatedAt`。
-- completed trades 集合使用 `ethAddress`、`completed_trades`、`completed_trade_pnl`、`duration_stats`、`stats_per_asset`、`total_trades`、`winning_trades`、`win_rate`、`win_rate_long`、`win_rate_short` 等旧字段。
-- 新版完整分析结果会额外写入 `analysis_result_v2`，不会覆盖旧字段。
-
-注意：如果旧库某个地址没有 `state.assetPositions` 或 `effective_position_value`，分析仍会运行，但无法准确排除当前未平仓币种，相关多空仓位统计也可能为空。建议先跑一次 `fetch --storage mongo` 更新状态和 fills。
-
-扫链发现账户，并写入本地地址库：
-
-```bash
-hyper-stats scan-blocks --block-count 1000 --concurrency 5
-```
-
-指定起始区块向前扫描：
-
-```bash
-hyper-stats scan-blocks --start-height 660876453 --block-count 30000 --concurrency 10
-```
-
-导入 Hyperliquid leaderboard 账户：
-
-```bash
-hyper-stats discover-leaderboard
-```
-
-导入 Hyperdash top-traders 账户：
-
-```bash
-hyper-stats discover-hyperdash-top-traders --top-traders-file /path/to/hyperdash_top_traders.json
-```
-
-如果不传 `--top-traders-file`，命令会尝试请求 `https://hyperdash.info/api/hyperdash/top-traders-cached`；这个接口可能被 Hyperdash 风控返回 403，因此更稳的方式是先保存 JSON 文件再导入。导入时会保留 `account_value`、`main_position`、`perp_*_pnl` 等元数据到地址库或 MongoDB 地址集合。
-
-查看地址库：
-
-```bash
-hyper-stats addresses --limit-addresses 30
-```
-
-只下载：
-
-```bash
-hyper-stats fetch --address-file addresses.txt --incremental
-```
-
-只分析本地缓存：
-
-```bash
-hyper-stats analyze
-```
-
-直接传地址：
-
-```bash
-hyper-stats run --addresses 0xabc...,0xdef...
-```
-
-## 日期筛选和排序
-
-日期筛选支持 `fetch`、`analyze` 和 `run`：
-
-```bash
-hyper-stats fetch --address-file addresses.txt --start-date 2025-01-01 --end-date 2025-01-31
-hyper-stats analyze --start-date 2025-01-01 --end-date 2025-01-31 --sort-by win_rate
-```
-
-- `--start-date`、`--end-date` 都是包含边界的筛选条件。
-- 只写日期时按 UTC 日期处理，例如 `--end-date 2025-01-31` 会包含 `2025-01-31` 当天所有 fills。
-- 也可以传 ISO 时间，例如 `2025-01-01T08:00:00Z` 或带时区偏移的时间。
-- 纯数字支持秒级或毫秒级时间戳。
-
-结果排序支持 `analyze` 和 `run`：
-
-```bash
-hyper-stats analyze --sort-by win_rate_wilson_lower_bound
-hyper-stats analyze --sort-by net_pnl
-hyper-stats analyze --sort-by total_trades --sort-asc
-```
-
-地址库排序用于决定批量抓取/分析时先处理哪些地址，支持本地地址库和旧 MongoDB：
-
-```bash
-hyper-stats run --address-sort seen_count
-hyper-stats run --address-sort account_value
-hyper-stats run --address-sort abs_effective_position_value
-hyper-stats addresses --address-sort last_block_height --limit-addresses 30
-```
-
-## 迁移覆盖
-
-`StarDreamAPI/scripts/hyperX` 中已经迁入独立项目的核心能力：
-
-- `fetch_and_store_addresses_from_block.py` / `fetch_and_store_addresses_from_block_requests.py`：对应 `hyper-stats scan-blocks`。
-- `fetch_and_store_address.py`：对应 `hyper-stats discover-leaderboard`。
-- `fetch_and_store_addresses_from_hyperdash_top_traders.py`：对应 `hyper-stats discover-hyperdash-top-traders`。
-- `fetch_and_store_user_fills.py`、`fetch_and_store_user_state.py`、`hyper_x_utils.py` 中的 fills/state 核心逻辑：对应 `hyper-stats fetch`。
-- `compute_complete_trades.py`：对应 `hyper-stats analyze` / `run` 中的完整交易聚合和胜率统计。
-- `analyze_ls_rate.py` 的基础多空分布统计：对应报告中的 population/position distribution。
-- `analyze_analyze_result.py` 的可视化目标：对应 `data/reports/dashboard.html`。
-- 旧 MongoDB 集合读写：对应 `--storage mongo` 和 `init-mongo`。
-- 旧脚本里的 `lastTime` 增量采集、fills 时间排序、地址按账户/仓位价值优先处理：对应 `--incremental`、`--start-date` / `--end-date`、`--address-sort` 和 `--sort-by`。
-
-暂未完整迁入的旧脚本/辅助能力：
-
-- `add_addresses_from_vaults.py`：从旧 `web3_hyperliquid_vaults` followers 导入地址。
-- `analyze_ls_rate_over_value_pro.py`：按入场价值区间的增强多空分析与历史快照。
-- `analyze_analyze_result_pro.py` / `test/导出数据供TradingView使用.py`：增强图表和 TradingView 导出。
-- `update_high_win_rate_user_state.py` / `run_fetch_states_and_analyze.py`：按高胜率筛选后周期性更新仓位的调度流程。
-- demo、测试临时脚本、旧 PNG/XLSX 输出文件。
-
-## 口径说明
-
-- 扫链账户发现：请求 Hyperliquid explorer `blockDetails`，提取每笔 tx 里的 `user` 字段，校验为 `0x` + 40 位十六进制地址后写入地址库。
-- 地址库：同一地址会 upsert，记录 `sources`、`first_seen_at`、`last_seen_at`、`seen_count` 和 `last_block_height`。
-- 完整交易：同一个币种下，每次遇到 `startPosition=0` 视为新一轮交易分组。
-- 当前仍有持仓的币种：默认会忽略该币种最后一笔聚合交易，避免把未完全结束的交易算进胜率。
-- 胜率：`net_pnl = closed_pnl - fees`，`net_pnl > 0` 算赢。
-- `win_rate_wilson_lower_bound`：Wilson 置信区间下界，用来减少“交易次数很少但胜率很高”的误导。
-
-## 测试
-
-```bash
-pytest
-```
+## TODO 待办事项
+实现已完成订单中间表而不是每次实时计算，实时计算会导致重新拉取新订单耗时，有速率限制【但是计算已完成订单需要去掉最后一单】

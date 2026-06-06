@@ -11,3 +11,11 @@ __pycache__/
 data/
 reports/
 *.log
+analyze_result.xlsx
+hyperdash_top_traders.json
+plots/
+plots_tmp/
+test/temp.json
+test/
+demo.py
+fetch_and_store_user_fills copy.py

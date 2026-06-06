@@ -1,416 +1,208 @@
-from __future__ import annotations
-
 import argparse
 import asyncio
-import json
 import logging
-from pathlib import Path
-
-import aiohttp
-
-from .analysis import (
-    SUMMARY_SORT_FIELDS,
-    TraderInput,
-    analyze_population,
-    analyze_trader,
-    filter_fills_by_time,
-    parse_time_ms,
-    sort_results,
-)
-from .api import HyperliquidClient
-from .config import load_env_file
-from .discovery import HyperliquidDiscoveryClient, extract_top_trader_addresses, scan_blocks
-from .mongo_store import MongoStore
-from .storage import ADDRESS_SORT_FIELDS, FileStore, load_addresses, sort_address_records
-from .visualize import render_dashboard
 
 
-def configure_logging(verbose: bool = False) -> None:
-    logging.addLevelName(logging.DEBUG, "调试")
-    logging.addLevelName(logging.INFO, "信息")
-    logging.addLevelName(logging.WARNING, "警告")
-    logging.addLevelName(logging.ERROR, "错误")
-    logging.addLevelName(logging.CRITICAL, "严重")
+def configure_logging(verbose: bool = False):
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
     )
 
 
-async def maybe_await(value):
-    # FileStore 是同步实现，MongoStore 是异步实现；这里统一两种调用方式。
-    if hasattr(value, "__await__"):
-        return await value
-    return value
+async def init_db_command(_args):
+    from hyperliquid_trader_stats.db.collections import init_hyper_x_collections
+
+    await init_hyper_x_collections()
 
 
-def get_time_bounds(args: argparse.Namespace) -> tuple[int | None, int | None]:
-    # 结束日期如果只写到天，要包含这一天的全部成交。
-    try:
-        start_time_ms = parse_time_ms(getattr(args, "start_date", None))
-        end_time_ms = parse_time_ms(getattr(args, "end_date", None), end_of_day=True)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-    if start_time_ms is not None and end_time_ms is not None and start_time_ms > end_time_ms:
-        raise SystemExit("--start-date 必须早于或等于 --end-date")
-    return start_time_ms, end_time_ms
+async def fetch_leaderboard_command(_args):
+    from hyperliquid_trader_stats.services.fetch_and_store_address import main
+
+    await main()
 
 
-def build_store(args: argparse.Namespace):
-    storage = getattr(args, "storage", "file")
-    if storage == "mongo":
-        return MongoStore(
-            uri=getattr(args, "mongo_uri", None),
-            db_name=getattr(args, "mongo_db", None),
-            report_dir=getattr(args, "data_dir", "data"),
+async def fetch_hyperdash_top_traders_command(_args):
+    from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_hyperdash_top_traders import (
+        fetch_and_store_addresses_from_hyperdash_top_traders,
+    )
+
+    await fetch_and_store_addresses_from_hyperdash_top_traders()
+
+
+async def fetch_block_addresses_command(args):
+    if args.requests:
+        from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block_requests import (
+            fetch_and_store_addresses_from_block,
         )
-    return FileStore(getattr(args, "data_dir", "data"))
-
-
-async def resolve_addresses(args: argparse.Namespace, store, *, use_cached_fills: bool = False) -> list[str]:
-    # 地址来源优先级：命令行/文件 > 本地 fills 缓存 > 地址库。
-    addresses = load_addresses(getattr(args, "addresses", None), getattr(args, "address_file", None))
-    limit = getattr(args, "limit_addresses", None)
-    address_sort = getattr(args, "address_sort", "seen_count")
-    address_sort_desc = not getattr(args, "address_sort_asc", False)
-    if not addresses and use_cached_fills and isinstance(store, FileStore):
-        addresses = [path.stem for path in sorted(store.fills_dir.glob("*.json"))]
-    if not addresses:
-        addresses = await maybe_await(
-            store.load_address_book_addresses(
-                limit=limit,
-                sort_by=address_sort,
-                descending=address_sort_desc,
-            )
-        )
-    if limit:
-        addresses = addresses[:limit]
-    return addresses
-
-
-async def fetch_command(args: argparse.Namespace) -> None:
-    store = build_store(args)
-    addresses = await resolve_addresses(args, store)
-    if not addresses:
-        raise SystemExit("没有找到地址。请使用 --addresses、--address-file，或者先运行 scan-blocks。")
-
-    start_date_ms, end_date_ms = get_time_bounds(args)
-    client = HyperliquidClient(info_url=args.info_url, fills_url=args.fills_url)
-    semaphore = asyncio.Semaphore(args.concurrency)
-
-    async with aiohttp.ClientSession() as session:
-        async def fetch_one(address: str) -> None:
-            async with semaphore:
-                incremental_start = await maybe_await(store.last_fill_time(address)) if args.incremental else 0
-                start_time = max(incremental_start, start_date_ms or 0)
-                logging.info("开始采集地址 %s：start_time=%s end_time=%s", address, start_time, end_date_ms)
-                state_task = client.fetch_user_state(session, address)
-                if end_date_ms is not None and start_time > end_date_ms:
-                    fills = []
-                    state = await state_task
-                else:
-                    fills_task = client.fetch_user_fills(
-                        session,
-                        address,
-                        start_time=start_time,
-                        end_time=end_date_ms,
-                    )
-                    fills, state = await asyncio.gather(fills_task, state_task)
-                fills = filter_fills_by_time(fills, start_time_ms=start_date_ms, end_time_ms=end_date_ms)
-                merged = await maybe_await(store.merge_save_fills(address, fills))
-                await maybe_await(
-                    store.save_state(
-                        address,
-                        {
-                            "raw": state.raw,
-                            "open_position_coins": state.open_position_coins,
-                            "effective_position_value": state.effective_position_value,
-                        },
-                    )
-                )
-                logging.info("已保存地址 %s 的 fills：总数=%s 本次新增=%s", address, len(merged), len(fills))
-
-        await asyncio.gather(*(fetch_one(address) for address in addresses))
-
-
-async def analyze_command(args: argparse.Namespace) -> None:
-    store = build_store(args)
-    addresses = await resolve_addresses(args, store, use_cached_fills=True)
-    if not addresses:
-        raise SystemExit("没有找到已缓存的 fills。请先运行 fetch，或通过 --addresses 指定地址。")
-
-    start_date_ms, end_date_ms = get_time_bounds(args)
-    results = []
-    for address in addresses:
-        fills = await maybe_await(store.load_fills(address))
-        fills = filter_fills_by_time(fills, start_time_ms=start_date_ms, end_time_ms=end_date_ms)
-        if hasattr(store, "load_state"):
-            state = await maybe_await(store.load_state(address))
-        else:
-            state = {}
-            state_path = store.state_path(address)
-            if state_path.exists():
-                import json
-
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-        trader = TraderInput(
-            address=address,
-            fills=fills,
-            open_position_coins=state.get("open_position_coins", []),
-            effective_position_value=state.get("effective_position_value"),
-        )
-        result = analyze_trader(trader)
-        await maybe_await(store.save_result(address, result))
-        results.append(result)
-        logging.info(
-            "已分析地址 %s：完整交易=%s 胜率=%s 净盈亏=%s",
-            address,
-            result["summary"]["total_trades"],
-            result["summary"]["win_rate"],
-            result["summary"]["net_pnl"],
-        )
-
-    results = sort_results(
-        results,
-        sort_by=getattr(args, "sort_by", "win_rate_wilson_lower_bound"),
-        descending=not getattr(args, "sort_asc", False),
-    )
-    population = analyze_population(results)
-    paths = await maybe_await(store.export_reports(results, population))
-    dashboard_path = render_dashboard(
-        results,
-        population,
-        Path(args.output),
-        sort_by=getattr(args, "sort_by", "win_rate_wilson_lower_bound"),
-        sort_desc=not getattr(args, "sort_asc", False),
-    )
-    logging.info("汇总报表：%s", paths["summary_csv"])
-    logging.info("完整交易明细：%s", paths["trades_csv"])
-    logging.info("可视化报告：%s", dashboard_path)
-
-
-async def run_command(args: argparse.Namespace) -> None:
-    await fetch_command(args)
-    await analyze_command(args)
-
-
-async def scan_blocks_command(args: argparse.Namespace) -> None:
-    store = build_store(args)
-    client = HyperliquidDiscoveryClient(
-        explorer_url=args.explorer_url,
-        explorer_ws_url=args.explorer_ws_url,
-    )
-    start_height = args.start_height
-    if start_height is None:
-        logging.info("正在获取 Hyperliquid explorer 最新区块高度")
-        start_height = await client.get_latest_block_height()
-    logging.info("开始扫链：起始区块=%s 扫描数量=%s", start_height, args.block_count)
-
-    results = await scan_blocks(
-        client,
-        start_height=start_height,
-        block_count=args.block_count,
-        concurrency=args.concurrency,
-    )
-    addresses = []
-    metadata_by_address = {}
-    for result in results:
-        for address in result.addresses:
-            addresses.append(address)
-            metadata_by_address[address] = {
-                "last_block_height": max(
-                    result.height,
-                    int(metadata_by_address.get(address, {}).get("last_block_height", 0)),
-                )
-            }
-    stats = await maybe_await(store.upsert_addresses(addresses, source="block_scan", metadata_by_address=metadata_by_address))
-    logging.info(
-        "地址库已更新：新增=%s 更新=%s 总数=%s 存储=%s",
-        stats["new"],
-        stats["updated"],
-        stats["total"],
-        getattr(store, "address_book_path", "MongoDB"),
-    )
-
-
-async def leaderboard_command(args: argparse.Namespace) -> None:
-    store = build_store(args)
-    client = HyperliquidDiscoveryClient(leaderboard_url=args.leaderboard_url)
-    async with aiohttp.ClientSession() as session:
-        addresses = await client.fetch_leaderboard_addresses(session)
-    stats = await maybe_await(store.upsert_addresses(addresses, source="leaderboard"))
-    logging.info(
-        "已从 leaderboard 更新地址库：抓取=%s 新增=%s 更新=%s 总数=%s",
-        len(addresses),
-        stats["new"],
-        stats["updated"],
-        stats["total"],
-    )
-
-
-async def hyperdash_top_traders_command(args: argparse.Namespace) -> None:
-    store = build_store(args)
-    if args.top_traders_file:
-        data = json.loads(Path(args.top_traders_file).read_text(encoding="utf-8"))
     else:
-        client = HyperliquidDiscoveryClient(hyperdash_top_traders_url=args.hyperdash_url)
-        async with aiohttp.ClientSession() as session:
-            data = await client.fetch_hyperdash_top_traders(session)
-
-    addresses, metadata_by_address, invalid_count = extract_top_trader_addresses(data)
-    stats = await maybe_await(
-        store.upsert_addresses(
-            addresses,
-            source="hyperdash_top_traders",
-            metadata_by_address=metadata_by_address,
+        from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block import (
+            fetch_and_store_addresses_from_block,
         )
+
+    await fetch_and_store_addresses_from_block(args.start_height, args.block_count)
+
+
+async def fetch_user_states_command(args):
+    from hyperliquid_trader_stats.services.fetch_and_store_user_state import main
+
+    await main(incremental=args.incremental)
+
+
+async def fetch_user_fills_command(args):
+    from hyperliquid_trader_stats.services.fetch_and_store_user_fills import (
+        fetch_and_store_user_fills,
     )
-    logging.info(
-        "已从 Hyperdash top-traders 更新地址库：抓取=%s 无效=%s 新增=%s 更新=%s 总数=%s",
-        len(addresses),
-        invalid_count,
-        stats["new"],
-        stats["updated"],
-        stats["total"],
+
+    await fetch_and_store_user_fills(limit=args.limit, incremental=args.incremental)
+
+
+async def compute_trades_command(args):
+    from hyperliquid_trader_stats.analytics.compute_complete_trades import (
+        process_all_addresses_incrementally,
+    )
+
+    await process_all_addresses_incrementally(incremental=args.incremental)
+
+
+async def analyze_ls_rate_command(args):
+    if args.basic:
+        from hyperliquid_trader_stats.plotting.analyze_ls_rate import analyze_ls_rate
+    else:
+        from hyperliquid_trader_stats.plotting.analyze_ls_rate_over_value_pro import (
+            analyze_ls_rate,
+        )
+
+    await analyze_ls_rate(
+        store_result=args.store_result,
+        visualize_result=args.visualize_result,
     )
 
 
-async def list_addresses_command(args: argparse.Namespace) -> None:
-    store = build_store(args)
-    records = await maybe_await(store.load_address_records())
-    records = sort_address_records(
-        records,
-        sort_by=args.address_sort,
-        descending=not args.address_sort_asc,
+async def update_high_winrate_positions_command(_args):
+    from hyperliquid_trader_stats.services.update_high_win_rate_user_state import (
+        update_high_winrate_positions,
     )
-    limit = args.limit_addresses or 50
-    print(f"地址总数：{len(records)}")
-    for record in records[:limit]:
-        sources = ",".join(record.get("sources", []))
-        print(f"{record.get('ethAddress')} 出现次数={record.get('seen_count', 0)} 来源={sources}")
+
+    await update_high_winrate_positions()
 
 
-async def init_mongo_command(args: argparse.Namespace) -> None:
-    store = MongoStore(uri=args.mongo_uri, db_name=args.mongo_db, report_dir=args.data_dir)
-    await store.init_indexes()
-    logging.info("旧 HyperX MongoDB 集合索引已初始化")
+async def scheduler_command(_args):
+    from hyperliquid_trader_stats.services.run_fetch_states_and_analyze import (
+        hyper_x_scheduler,
+    )
+
+    await hyper_x_scheduler()
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser():
     parser = argparse.ArgumentParser(
         prog="hyper-stats",
-        description="Download Hyperliquid account fills, calculate win rates, and render a dashboard.",
+        description="Collect and analyze Hyperliquid trader statistics.",
     )
-    parser.add_argument("--verbose", action="store_true", help="Enable debug logs.")
-
-    shared = argparse.ArgumentParser(add_help=False)
-    shared.add_argument("--addresses", help="Comma-separated addresses.")
-    shared.add_argument("--address-file", help="Text/CSV/JSON file containing addresses.")
-    shared.add_argument("--data-dir", default="data", help="Local cache directory.")
-    shared.add_argument("--output", default="data/reports/dashboard.html", help="Dashboard HTML output path.")
-    shared.add_argument("--limit-addresses", type=int, help="Limit addresses loaded from args, file, or address book.")
-    shared.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
-    shared.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
-    shared.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
-    shared.add_argument("--start-date", help="Inclusive fill start date/time, e.g. 2025-01-01 or 2025-01-01T00:00:00Z.")
-    shared.add_argument("--end-date", help="Inclusive fill end date/time. A date-only value includes the whole UTC day.")
-    shared.add_argument(
-        "--address-sort",
-        choices=sorted(ADDRESS_SORT_FIELDS),
-        default="seen_count",
-        help="Sort field when loading addresses from the address book.",
-    )
-    shared.add_argument("--address-sort-asc", action="store_true", help="Sort address book ascending instead of descending.")
-
-    fetch_shared = argparse.ArgumentParser(add_help=False)
-    fetch_shared.add_argument("--info-url", default="https://api.hyperliquid.xyz/info")
-    fetch_shared.add_argument("--fills-url", default="https://api-ui.hyperliquid.xyz/info")
-    fetch_shared.add_argument("--concurrency", type=int, default=3)
-    fetch_shared.add_argument("--incremental", action=argparse.BooleanOptionalAction, default=True)
-
-    analyze_shared = argparse.ArgumentParser(add_help=False)
-    analyze_shared.add_argument(
-        "--sort-by",
-        choices=sorted(SUMMARY_SORT_FIELDS),
-        default="win_rate_wilson_lower_bound",
-        help="Sort field for summary.csv and dashboard.",
-    )
-    analyze_shared.add_argument("--sort-asc", action="store_true", help="Sort analysis results ascending instead of descending.")
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("fetch", parents=[shared, fetch_shared], help="Download fills and current positions.")
-    subparsers.add_parser("analyze", parents=[shared, analyze_shared], help="Analyze cached fills and render reports.")
-    subparsers.add_parser("run", parents=[shared, fetch_shared, analyze_shared], help="Fetch, analyze, and render reports.")
-    scan_parser = subparsers.add_parser("scan-blocks", help="Scan Hyperliquid explorer blocks and add user accounts to the local address book.")
-    scan_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
-    scan_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
-    scan_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
-    scan_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
-    scan_parser.add_argument("--start-height", type=int, help="Start block height. Defaults to latest explorer block.")
-    scan_parser.add_argument("--block-count", type=int, default=1000, help="Number of blocks to scan backwards.")
-    scan_parser.add_argument("--concurrency", type=int, default=5, help="Concurrent block requests.")
-    scan_parser.add_argument("--explorer-url", default="https://rpc.hyperliquid.xyz/explorer")
-    scan_parser.add_argument("--explorer-ws-url", default="wss://rpc.hyperliquid.xyz/ws")
 
-    leaderboard_parser = subparsers.add_parser("discover-leaderboard", help="Import Hyperliquid leaderboard accounts into the local address book.")
-    leaderboard_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
-    leaderboard_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
-    leaderboard_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
-    leaderboard_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
-    leaderboard_parser.add_argument("--leaderboard-url", default="https://stats-data.hyperliquid.xyz/Mainnet/leaderboard")
+    init_db = subparsers.add_parser("init-db", help="Create MongoDB indexes.")
+    init_db.set_defaults(handler=init_db_command)
 
-    hyperdash_parser = subparsers.add_parser("discover-hyperdash-top-traders", help="Import Hyperdash top-trader accounts into the address book.")
-    hyperdash_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
-    hyperdash_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
-    hyperdash_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
-    hyperdash_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
-    hyperdash_parser.add_argument("--top-traders-file", help="Path to a Hyperdash top-traders JSON file.")
-    hyperdash_parser.add_argument("--hyperdash-url", default="https://hyperdash.info/api/hyperdash/top-traders-cached")
-
-    addresses_parser = subparsers.add_parser("addresses", help="List accounts currently stored in the local address book.")
-    addresses_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
-    addresses_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
-    addresses_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
-    addresses_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
-    addresses_parser.add_argument("--limit-addresses", type=int, help="Maximum rows to print.")
-    addresses_parser.add_argument(
-        "--address-sort",
-        choices=sorted(ADDRESS_SORT_FIELDS),
-        default="seen_count",
-        help="Sort field for printed address records.",
+    leaderboard = subparsers.add_parser(
+        "fetch-leaderboard",
+        help="Fetch leaderboard addresses into MongoDB.",
     )
-    addresses_parser.add_argument("--address-sort-asc", action="store_true", help="Sort address records ascending instead of descending.")
+    leaderboard.set_defaults(handler=fetch_leaderboard_command)
 
-    init_mongo_parser = subparsers.add_parser("init-mongo", help="Create indexes for the legacy StarDreamAPI HyperX MongoDB collections.")
-    init_mongo_parser.add_argument("--data-dir", default="data", help="Local report directory.")
-    init_mongo_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
-    init_mongo_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
+    hyperdash = subparsers.add_parser(
+        "fetch-hyperdash-top-traders",
+        help="Fetch Hyperdash top-trader addresses into MongoDB.",
+    )
+    hyperdash.set_defaults(handler=fetch_hyperdash_top_traders_command)
+
+    block_addresses = subparsers.add_parser(
+        "fetch-block-addresses",
+        help="Fetch account addresses from explorer blocks.",
+    )
+    block_addresses.add_argument("start_height", type=int)
+    block_addresses.add_argument("--block-count", type=int, default=1000)
+    block_addresses.add_argument(
+        "--requests",
+        action="store_true",
+        help="Use the synchronous requests-backed block fetcher.",
+    )
+    block_addresses.set_defaults(handler=fetch_block_addresses_command)
+
+    states = subparsers.add_parser(
+        "fetch-user-states",
+        help="Fetch current account state and position values.",
+    )
+    states.add_argument(
+        "--incremental",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    states.set_defaults(handler=fetch_user_states_command)
+
+    fills = subparsers.add_parser(
+        "fetch-user-fills",
+        help="Fetch user fills into MongoDB.",
+    )
+    fills.add_argument("--limit", type=int, default=30000)
+    fills.add_argument(
+        "--incremental",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    fills.set_defaults(handler=fetch_user_fills_command)
+
+    compute = subparsers.add_parser(
+        "compute-trades",
+        help="Compute completed trades and trader summaries.",
+    )
+    compute.add_argument(
+        "--incremental",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    compute.set_defaults(handler=compute_trades_command)
+
+    analyze = subparsers.add_parser(
+        "analyze-ls-rate",
+        help="Analyze win-rate and long/short distribution.",
+    )
+    analyze.add_argument("--basic", action="store_true", help="Use the basic analyzer.")
+    analyze.add_argument(
+        "--store-result",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    analyze.add_argument(
+        "--visualize-result",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    analyze.set_defaults(handler=analyze_ls_rate_command)
+
+    update_high_winrate = subparsers.add_parser(
+        "update-high-winrate-positions",
+        help="Refresh user states for high win-rate accounts.",
+    )
+    update_high_winrate.set_defaults(handler=update_high_winrate_positions_command)
+
+    scheduler = subparsers.add_parser(
+        "run-scheduler",
+        help="Run the current fetch/analyze scheduler loop.",
+    )
+    scheduler.set_defaults(handler=scheduler_command)
+
     return parser
 
 
-def main() -> None:
-    load_env_file()
+def main():
     parser = build_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)
-    if args.command == "fetch":
-        asyncio.run(fetch_command(args))
-    elif args.command == "analyze":
-        asyncio.run(analyze_command(args))
-    elif args.command == "run":
-        asyncio.run(run_command(args))
-    elif args.command == "scan-blocks":
-        asyncio.run(scan_blocks_command(args))
-    elif args.command == "discover-leaderboard":
-        asyncio.run(leaderboard_command(args))
-    elif args.command == "discover-hyperdash-top-traders":
-        asyncio.run(hyperdash_top_traders_command(args))
-    elif args.command == "addresses":
-        asyncio.run(list_addresses_command(args))
-    elif args.command == "init-mongo":
-        asyncio.run(init_mongo_command(args))
-    else:
-        parser.error(f"未知命令：{args.command}")
+    asyncio.run(args.handler(args))
 
 
 if __name__ == "__main__":
