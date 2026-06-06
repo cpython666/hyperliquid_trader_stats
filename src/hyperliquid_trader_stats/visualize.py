@@ -29,6 +29,7 @@ def render_dashboard(
         output_path.write_text(html, encoding="utf-8")
         return output_path
 
+    # 结果表按用户指定字段排序，再用净盈亏和交易数做稳定的次级排序。
     sort_columns = [column for column in [sort_by, "net_pnl", "total_trades"] if column in summary.columns]
     summary = summary.sort_values(sort_columns, ascending=not sort_desc, na_position="last")
     top = summary.head(50).copy()

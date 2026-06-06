@@ -53,15 +53,15 @@ class HyperliquidClient:
                     if response.status == 200:
                         return await response.json()
                     if response.status == 429:
-                        logger.warning("Hyperliquid rate limited request, sleeping %.0fs", self.rate_limit_sleep)
+                        logger.warning("Hyperliquid 接口触发限流，等待 %.0f 秒后重试", self.rate_limit_sleep)
                         await asyncio.sleep(self.rate_limit_sleep)
                         continue
                     text = await response.text()
-                    logger.warning("request failed status=%s attempt=%s body=%s", response.status, attempt, text[:300])
+                    logger.warning("请求失败：状态=%s 第 %s 次尝试 响应=%s", response.status, attempt, text[:300])
             except Exception as exc:
-                logger.warning("request error attempt=%s payload_type=%s error=%s", attempt, payload.get("type"), exc)
+                logger.warning("请求异常：第 %s 次尝试 请求类型=%s 错误=%s", attempt, payload.get("type"), exc)
             await asyncio.sleep(self.retry_sleep)
-        raise RuntimeError(f"Hyperliquid request failed after {self.retries} attempts: {payload.get('type')}")
+        raise RuntimeError(f"Hyperliquid 请求重试 {self.retries} 次后仍失败：{payload.get('type')}")
 
     async def fetch_user_fills(
         self,
@@ -77,6 +77,7 @@ class HyperliquidClient:
         seen_tids: set[Any] = set()
         current_start_time = start_time
 
+        # userFillsByTime 需要按 time 续页；用 tid 去重可避免翻页边界重复。
         while True:
             payload = {
                 "type": "userFillsByTime",
@@ -89,7 +90,7 @@ class HyperliquidClient:
             data = await self._post(session, self.fills_url, payload)
             fills = data.get("fills", []) if isinstance(data, dict) else data
             if not isinstance(fills, list):
-                raise RuntimeError(f"unexpected fills response for {address}: {type(fills)!r}")
+                raise RuntimeError(f"地址 {address} 的 fills 响应类型异常：{type(fills)!r}")
 
             new_fills = []
             for fill in fills:

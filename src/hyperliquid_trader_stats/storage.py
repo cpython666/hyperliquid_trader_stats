@@ -39,6 +39,7 @@ def _nested_number(record: dict[str, Any], *path: str) -> float:
 
 def _address_sort_value(record: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "account_value":
+        # 兼容旧 Mongo 字段、早期冗余字段和 Hyperdash 导入字段。
         return (
             _nested_number(record, "marginSummary", "accountValue")
             or _nested_number(record, "accountValue")
@@ -66,7 +67,7 @@ def sort_address_records(
     descending: bool = True,
 ) -> list[dict[str, Any]]:
     if sort_by not in ADDRESS_SORT_FIELDS:
-        raise ValueError(f"Unsupported address sort field: {sort_by}")
+        raise ValueError(f"不支持的地址排序字段：{sort_by}")
 
     def key(record: dict[str, Any]) -> tuple[Any, float, str, str]:
         return (
@@ -106,7 +107,7 @@ class FileStore:
             return []
         data = json.loads(self.address_book_path.read_text(encoding="utf-8"))
         if not isinstance(data, list):
-            raise ValueError(f"{self.address_book_path} must contain a JSON list")
+            raise ValueError(f"{self.address_book_path} 必须是 JSON list")
         return data
 
     def save_address_records(self, records: list[dict[str, Any]]) -> None:
@@ -192,6 +193,7 @@ class FileStore:
 
     def merge_save_fills(self, address: str, new_fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
         existing = self.load_fills(address)
+        # tid 是 Hyperliquid fills 的天然去重键；无 tid 的异常数据保留原样。
         by_tid = {item.get("tid"): item for item in existing if item.get("tid") is not None}
         no_tid = [item for item in existing if item.get("tid") is None]
         for fill in new_fills:
@@ -264,7 +266,7 @@ def load_addresses(addresses: str | None = None, address_file: str | None = None
                 for item in data:
                     loaded.append(item["ethAddress"] if isinstance(item, dict) and "ethAddress" in item else str(item))
             else:
-                raise ValueError("JSON address file must be a list")
+                raise ValueError("JSON 地址文件必须是 list")
         else:
             for line in text.splitlines():
                 line = line.strip()

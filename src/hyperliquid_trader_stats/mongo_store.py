@@ -20,7 +20,7 @@ def _import_mongo_deps():
         from motor.motor_asyncio import AsyncIOMotorClient
         from pymongo import ASCENDING, DESCENDING, UpdateOne
     except ImportError as exc:
-        raise RuntimeError('MongoDB support is optional. Install it with: pip install -e ".[mongo]"') from exc
+        raise RuntimeError('MongoDB 支持是可选依赖，请先安装：pip install -e ".[mongo]"') from exc
     return AsyncIOMotorClient, ASCENDING, DESCENDING, UpdateOne
 
 
@@ -45,6 +45,7 @@ def _completed_trade_payload(address: str, result: dict[str, Any]) -> dict[str, 
     trades = result["trades"]
     per_asset = result["per_asset"]
 
+    # 这里保留旧 StarDreamAPI 字段结构，同时把新版完整结果放进 analysis_result_v2。
     long_pnl = round(sum(trade["closed_pnl"] for trade in trades if trade["direction"] == "Long"), 2)
     short_pnl = round(sum(trade["closed_pnl"] for trade in trades if trade["direction"] == "Short"), 2)
     entry_value_summary = {}
@@ -103,13 +104,13 @@ def _completed_trade_payload(address: str, result: dict[str, Any]) -> dict[str, 
 
 
 class MongoStore:
-    """Read/write the legacy StarDreamAPI HyperX MongoDB collections."""
+    """读写 StarDreamAPI 旧 HyperX MongoDB 集合。"""
 
     def __init__(self, *, uri: str | None = None, db_name: str | None = None, report_dir: str = "data") -> None:
         uri = uri or os.getenv("MONGODB_URL")
         db_name = db_name or os.getenv("MONGODB_DB_NAME")
         if not uri or not db_name:
-            raise RuntimeError("MongoDB storage needs MONGODB_URL and MONGODB_DB_NAME, or --mongo-uri/--mongo-db.")
+            raise RuntimeError("MongoDB 存储需要 MONGODB_URL 和 MONGODB_DB_NAME，或传入 --mongo-uri/--mongo-db。")
 
         AsyncIOMotorClient, _, _, _ = _import_mongo_deps()
         self.client = AsyncIOMotorClient(uri)
@@ -157,6 +158,7 @@ class MongoStore:
             metadata = metadata_by_address.get(address, {})
             max_fields = {}
             if metadata.get("last_block_height") is not None:
+                # 扫链是倒序跑的，last_block_height 要保留见过的最高区块。
                 max_fields["last_block_height"] = int(metadata["last_block_height"])
                 metadata = {key: value for key, value in metadata.items() if key != "last_block_height"}
             set_fields = {
@@ -248,6 +250,7 @@ class MongoStore:
             await self.user_fills.bulk_write(operations, ordered=False)
             latest_time = max((fill.get("time") or 0 for fill in new_fills), default=0)
             if latest_time:
+                # 旧脚本用 lastTime 做增量续抓，这里同步维护该冗余表。
                 await self.user_fills_summary.update_one(
                     {"ethAddress": address},
                     {"$set": {"ethAddress": address, "lastTime": latest_time, "updatedAt": now}},

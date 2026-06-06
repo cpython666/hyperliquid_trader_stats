@@ -26,6 +26,11 @@ from .visualize import render_dashboard
 
 
 def configure_logging(verbose: bool = False) -> None:
+    logging.addLevelName(logging.DEBUG, "调试")
+    logging.addLevelName(logging.INFO, "信息")
+    logging.addLevelName(logging.WARNING, "警告")
+    logging.addLevelName(logging.ERROR, "错误")
+    logging.addLevelName(logging.CRITICAL, "严重")
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
@@ -33,19 +38,21 @@ def configure_logging(verbose: bool = False) -> None:
 
 
 async def maybe_await(value):
+    # FileStore 是同步实现，MongoStore 是异步实现；这里统一两种调用方式。
     if hasattr(value, "__await__"):
         return await value
     return value
 
 
 def get_time_bounds(args: argparse.Namespace) -> tuple[int | None, int | None]:
+    # 结束日期如果只写到天，要包含这一天的全部成交。
     try:
         start_time_ms = parse_time_ms(getattr(args, "start_date", None))
         end_time_ms = parse_time_ms(getattr(args, "end_date", None), end_of_day=True)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     if start_time_ms is not None and end_time_ms is not None and start_time_ms > end_time_ms:
-        raise SystemExit("--start-date must be earlier than or equal to --end-date")
+        raise SystemExit("--start-date 必须早于或等于 --end-date")
     return start_time_ms, end_time_ms
 
 
@@ -61,6 +68,7 @@ def build_store(args: argparse.Namespace):
 
 
 async def resolve_addresses(args: argparse.Namespace, store, *, use_cached_fills: bool = False) -> list[str]:
+    # 地址来源优先级：命令行/文件 > 本地 fills 缓存 > 地址库。
     addresses = load_addresses(getattr(args, "addresses", None), getattr(args, "address_file", None))
     limit = getattr(args, "limit_addresses", None)
     address_sort = getattr(args, "address_sort", "seen_count")
@@ -84,7 +92,7 @@ async def fetch_command(args: argparse.Namespace) -> None:
     store = build_store(args)
     addresses = await resolve_addresses(args, store)
     if not addresses:
-        raise SystemExit("No addresses provided. Use --addresses, --address-file, or scan-blocks first.")
+        raise SystemExit("没有找到地址。请使用 --addresses、--address-file，或者先运行 scan-blocks。")
 
     start_date_ms, end_date_ms = get_time_bounds(args)
     client = HyperliquidClient(info_url=args.info_url, fills_url=args.fills_url)
@@ -95,7 +103,7 @@ async def fetch_command(args: argparse.Namespace) -> None:
             async with semaphore:
                 incremental_start = await maybe_await(store.last_fill_time(address)) if args.incremental else 0
                 start_time = max(incremental_start, start_date_ms or 0)
-                logging.info("fetching %s from start_time=%s end_time=%s", address, start_time, end_date_ms)
+                logging.info("开始采集地址 %s：start_time=%s end_time=%s", address, start_time, end_date_ms)
                 state_task = client.fetch_user_state(session, address)
                 if end_date_ms is not None and start_time > end_date_ms:
                     fills = []
@@ -120,7 +128,7 @@ async def fetch_command(args: argparse.Namespace) -> None:
                         },
                     )
                 )
-                logging.info("saved %s fills for %s (%s new)", len(merged), address, len(fills))
+                logging.info("已保存地址 %s 的 fills：总数=%s 本次新增=%s", address, len(merged), len(fills))
 
         await asyncio.gather(*(fetch_one(address) for address in addresses))
 
@@ -129,7 +137,7 @@ async def analyze_command(args: argparse.Namespace) -> None:
     store = build_store(args)
     addresses = await resolve_addresses(args, store, use_cached_fills=True)
     if not addresses:
-        raise SystemExit("No cached fills found. Run fetch first or pass --addresses.")
+        raise SystemExit("没有找到已缓存的 fills。请先运行 fetch，或通过 --addresses 指定地址。")
 
     start_date_ms, end_date_ms = get_time_bounds(args)
     results = []
@@ -155,7 +163,7 @@ async def analyze_command(args: argparse.Namespace) -> None:
         await maybe_await(store.save_result(address, result))
         results.append(result)
         logging.info(
-            "analyzed %s trades=%s win_rate=%s net_pnl=%s",
+            "已分析地址 %s：完整交易=%s 胜率=%s 净盈亏=%s",
             address,
             result["summary"]["total_trades"],
             result["summary"]["win_rate"],
@@ -176,9 +184,9 @@ async def analyze_command(args: argparse.Namespace) -> None:
         sort_by=getattr(args, "sort_by", "win_rate_wilson_lower_bound"),
         sort_desc=not getattr(args, "sort_asc", False),
     )
-    logging.info("summary: %s", paths["summary_csv"])
-    logging.info("trades: %s", paths["trades_csv"])
-    logging.info("dashboard: %s", dashboard_path)
+    logging.info("汇总报表：%s", paths["summary_csv"])
+    logging.info("完整交易明细：%s", paths["trades_csv"])
+    logging.info("可视化报告：%s", dashboard_path)
 
 
 async def run_command(args: argparse.Namespace) -> None:
@@ -194,9 +202,9 @@ async def scan_blocks_command(args: argparse.Namespace) -> None:
     )
     start_height = args.start_height
     if start_height is None:
-        logging.info("fetching latest Hyperliquid explorer block height")
+        logging.info("正在获取 Hyperliquid explorer 最新区块高度")
         start_height = await client.get_latest_block_height()
-    logging.info("scanning blocks start_height=%s block_count=%s", start_height, args.block_count)
+    logging.info("开始扫链：起始区块=%s 扫描数量=%s", start_height, args.block_count)
 
     results = await scan_blocks(
         client,
@@ -217,7 +225,7 @@ async def scan_blocks_command(args: argparse.Namespace) -> None:
             }
     stats = await maybe_await(store.upsert_addresses(addresses, source="block_scan", metadata_by_address=metadata_by_address))
     logging.info(
-        "address book updated: new=%s updated=%s total=%s files=%s",
+        "地址库已更新：新增=%s 更新=%s 总数=%s 存储=%s",
         stats["new"],
         stats["updated"],
         stats["total"],
@@ -232,7 +240,7 @@ async def leaderboard_command(args: argparse.Namespace) -> None:
         addresses = await client.fetch_leaderboard_addresses(session)
     stats = await maybe_await(store.upsert_addresses(addresses, source="leaderboard"))
     logging.info(
-        "address book updated from leaderboard: fetched=%s new=%s updated=%s total=%s",
+        "已从 leaderboard 更新地址库：抓取=%s 新增=%s 更新=%s 总数=%s",
         len(addresses),
         stats["new"],
         stats["updated"],
@@ -258,7 +266,7 @@ async def hyperdash_top_traders_command(args: argparse.Namespace) -> None:
         )
     )
     logging.info(
-        "address book updated from Hyperdash top-traders: fetched=%s invalid=%s new=%s updated=%s total=%s",
+        "已从 Hyperdash top-traders 更新地址库：抓取=%s 无效=%s 新增=%s 更新=%s 总数=%s",
         len(addresses),
         invalid_count,
         stats["new"],
@@ -276,16 +284,16 @@ async def list_addresses_command(args: argparse.Namespace) -> None:
         descending=not args.address_sort_asc,
     )
     limit = args.limit_addresses or 50
-    print(f"total addresses: {len(records)}")
+    print(f"地址总数：{len(records)}")
     for record in records[:limit]:
         sources = ",".join(record.get("sources", []))
-        print(f"{record.get('ethAddress')} seen={record.get('seen_count', 0)} sources={sources}")
+        print(f"{record.get('ethAddress')} 出现次数={record.get('seen_count', 0)} 来源={sources}")
 
 
 async def init_mongo_command(args: argparse.Namespace) -> None:
     store = MongoStore(uri=args.mongo_uri, db_name=args.mongo_db, report_dir=args.data_dir)
     await store.init_indexes()
-    logging.info("MongoDB indexes initialized for legacy HyperX collections")
+    logging.info("旧 HyperX MongoDB 集合索引已初始化")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -402,7 +410,7 @@ def main() -> None:
     elif args.command == "init-mongo":
         asyncio.run(init_mongo_command(args))
     else:
-        parser.error(f"unknown command: {args.command}")
+        parser.error(f"未知命令：{args.command}")
 
 
 if __name__ == "__main__":

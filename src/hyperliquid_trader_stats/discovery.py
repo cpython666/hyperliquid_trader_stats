@@ -40,6 +40,7 @@ def extract_user_addresses(block_data: dict[str, Any]) -> tuple[list[str], int, 
     addresses: list[str] = []
     invalid_count = 0
     for tx in txs:
+        # explorer 区块里 user 字段可能是 Leader 等非地址值，需要过滤掉。
         user = tx.get("user") if isinstance(tx, dict) else None
         if is_eth_address(user):
             addresses.append(normalize_address(user))
@@ -122,17 +123,17 @@ class HyperliquidDiscoveryClient:
                         data = await response.json()
                         if isinstance(data, dict):
                             return data
-                        raise RuntimeError(f"unexpected block response type: {type(data)!r}")
+                        raise RuntimeError(f"区块响应类型异常：{type(data)!r}")
                     if response.status == 429:
-                        logger.warning("[%s] rate limited, sleeping %.0fs", height, self.rate_limit_sleep)
+                        logger.warning("区块 %s 请求触发限流，等待 %.0f 秒后重试", height, self.rate_limit_sleep)
                         await asyncio.sleep(self.rate_limit_sleep)
                         continue
                     body = await response.text()
-                    logger.warning("[%s] failed status=%s attempt=%s body=%s", height, response.status, attempt, body[:200])
+                    logger.warning("区块 %s 请求失败：状态=%s 第 %s 次尝试 响应=%s", height, response.status, attempt, body[:200])
             except Exception as exc:
-                logger.warning("[%s] request error attempt=%s error=%s", height, attempt, exc)
+                logger.warning("区块 %s 请求异常：第 %s 次尝试 错误=%s", height, attempt, exc)
             await asyncio.sleep(self.retry_sleep)
-        raise RuntimeError(f"failed to fetch block {height}")
+        raise RuntimeError(f"获取区块 {height} 失败")
 
     async def scan_block(self, session: aiohttp.ClientSession, height: int) -> BlockScanResult:
         data = await self.fetch_block(session, height)
@@ -159,7 +160,7 @@ class HyperliquidDiscoveryClient:
                             return height
                     if message.type in {aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED}:
                         break
-        raise RuntimeError("failed to get latest Hyperliquid explorer block height")
+        raise RuntimeError("获取 Hyperliquid explorer 最新区块高度失败")
 
     @staticmethod
     def _extract_height_from_ws_message(data: Any) -> int | None:
@@ -192,11 +193,11 @@ class HyperliquidDiscoveryClient:
                             for row in rows
                             if isinstance(row, dict) and is_eth_address(row.get("ethAddress"))
                         ]
-                    logger.warning("leaderboard failed status=%s attempt=%s", response.status, attempt)
+                    logger.warning("leaderboard 请求失败：状态=%s 第 %s 次尝试", response.status, attempt)
             except Exception as exc:
-                logger.warning("leaderboard request error attempt=%s error=%s", attempt, exc)
+                logger.warning("leaderboard 请求异常：第 %s 次尝试 错误=%s", attempt, exc)
             await asyncio.sleep(self.retry_sleep)
-        raise RuntimeError("failed to fetch Hyperliquid leaderboard")
+        raise RuntimeError("获取 Hyperliquid leaderboard 失败")
 
     async def fetch_hyperdash_top_traders(self, session: aiohttp.ClientSession) -> Any:
         for attempt in range(1, self.retries + 1):
@@ -205,11 +206,11 @@ class HyperliquidDiscoveryClient:
                 async with session.get(self.hyperdash_top_traders_url, headers=HEADERS, timeout=timeout) as response:
                     if response.status == 200:
                         return await response.json()
-                    logger.warning("Hyperdash top-traders failed status=%s attempt=%s", response.status, attempt)
+                    logger.warning("Hyperdash top-traders 请求失败：状态=%s 第 %s 次尝试", response.status, attempt)
             except Exception as exc:
-                logger.warning("Hyperdash top-traders request error attempt=%s error=%s", attempt, exc)
+                logger.warning("Hyperdash top-traders 请求异常：第 %s 次尝试 错误=%s", attempt, exc)
             await asyncio.sleep(self.retry_sleep)
-        raise RuntimeError("failed to fetch Hyperdash top-traders")
+        raise RuntimeError("获取 Hyperdash top-traders 失败")
 
 
 async def scan_blocks(
@@ -223,6 +224,7 @@ async def scan_blocks(
     queue: asyncio.Queue[int | None] = asyncio.Queue()
     results: list[BlockScanResult] = []
 
+    # 用 None 作为队列结束标记，让 worker 在扫完分配的区块后自然退出。
     for height in heights:
         queue.put_nowait(height)
     for _ in range(concurrency):
@@ -238,7 +240,7 @@ async def scan_blocks(
                     result = await client.scan_block(session, height)
                     results.append(result)
                     logger.info(
-                        "[%s] addresses=%s txs=%s invalid_users=%s",
+                        "区块 %s 扫描完成：地址数=%s 交易数=%s 非地址 user=%s",
                         height,
                         len(result.addresses),
                         result.tx_count,

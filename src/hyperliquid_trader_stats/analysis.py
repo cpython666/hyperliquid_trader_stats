@@ -40,6 +40,7 @@ def decimal2(value: Decimal) -> float:
 
 
 def wilson_lower_bound(wins: int, total: int) -> float:
+    # Wilson 下界用于压低“小样本高胜率”的排名权重。
     if total <= 0:
         return 0.0
     z = 1.96
@@ -84,8 +85,9 @@ def parse_time_ms(value: str | int | None, *, end_of_day: bool = False) -> int |
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError as exc:
-        raise ValueError(f"Invalid date/time value: {value!r}") from exc
+        raise ValueError(f"日期/时间格式无效：{value!r}") from exc
 
+    # 日期筛选默认按 UTC 解释；只传日期作为结束时间时，包含当天全部 fills。
     if "T" not in normalized and len(normalized) == 10 and end_of_day:
         parsed = datetime.combine(parsed.date(), time.max)
     if parsed.tzinfo is None:
@@ -99,6 +101,7 @@ def filter_fills_by_time(
     start_time_ms: int | None = None,
     end_time_ms: int | None = None,
 ) -> list[dict[str, Any]]:
+    # 下载和分析都共用这层过滤，确保同一组参数下口径一致。
     filtered = []
     for fill in fills:
         fill_time = int(fill.get("time", 0) or 0)
@@ -117,7 +120,7 @@ def sort_results(
     descending: bool = True,
 ) -> list[dict[str, Any]]:
     if sort_by not in SUMMARY_SORT_FIELDS:
-        raise ValueError(f"Unsupported sort field: {sort_by}")
+        raise ValueError(f"不支持的排序字段：{sort_by}")
 
     def sort_value(result: dict[str, Any]) -> tuple[Any, float, int, str]:
         summary = result.get("summary", {})
@@ -146,6 +149,7 @@ def merge_fills_to_completed_trades(
     groups: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
     counters: dict[str, int] = defaultdict(int)
 
+    # 旧脚本口径：同一个币种下，每次 startPosition 回到 0 都视为新一轮完整交易。
     for fill in sorted_fills:
         coin = str(fill.get("coin", "UNKNOWN"))
         if _is_zero(fill.get("startPosition")):
@@ -219,6 +223,7 @@ def merge_fills_to_completed_trades(
         )
 
     if open_position_coins:
+        # 当前仍有持仓的币种，忽略该币种最后一轮交易，避免把未平仓交易算入胜率。
         latest_open_keys = {
             coin: max((trade["coin_index"] for trade in trades if trade["coin"] == coin), default=None)
             for coin in open_position_coins
@@ -300,6 +305,7 @@ def analyze_population(results: list[dict[str, Any]]) -> dict[str, Any]:
 
     position_distribution: dict[str, dict[str, Any]] = {}
     for threshold in thresholds:
+        # 用当前 effective_position_value 粗略统计高胜率账户偏多/偏空。
         key = f"ge_{threshold}" if threshold < 100 else "eq_100"
         if threshold < 100:
             selected = [item for item in summaries if item["win_rate"] >= threshold]
