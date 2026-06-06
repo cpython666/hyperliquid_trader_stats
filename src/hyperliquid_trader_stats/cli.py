@@ -18,6 +18,7 @@ from .analysis import (
     sort_results,
 )
 from .api import HyperliquidClient
+from .config import load_env_file
 from .discovery import HyperliquidDiscoveryClient, extract_top_trader_addresses, scan_blocks
 from .mongo_store import MongoStore
 from .storage import ADDRESS_SORT_FIELDS, FileStore, load_addresses, sort_address_records
@@ -380,6 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    load_env_file()
     parser = build_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)

@@ -90,6 +90,21 @@ export MONGODB_URL="<your MongoDB connection string>"
 export MONGODB_DB_NAME="<your MongoDB database name>"
 ```
 
+也可以在项目根目录创建本地 `.env`，命令运行时会自动读取：
+
+```bash
+cp .env.example .env
+```
+
+然后编辑 `.env`：
+
+```text
+MONGODB_URL="<your MongoDB connection string>"
+MONGODB_DB_NAME="<your MongoDB database name>"
+```
+
+`.env` 已经在 `.gitignore` 中，不会提交到公开仓库。
+
 初始化旧集合索引：
 
 ```bash
