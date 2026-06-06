@@ -14,6 +14,7 @@ setup(
         "plotly>=5.20",
     ],
     extras_require={
+        "mongo": ["motor>=3.5", "pymongo>=4.6"],
         "dev": ["pytest>=8.0"],
     },
     entry_points={
@@ -22,4 +23,3 @@ setup(
         ],
     },
 )
-

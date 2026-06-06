@@ -18,6 +18,12 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+如果要直接读写旧项目的 MongoDB：
+
+```bash
+pip install -e ".[dev,mongo]"
+```
+
 ## 准备地址
 
 建一个文本文件，例如 `addresses.txt`：
@@ -68,6 +74,70 @@ open data/reports/dashboard.html
 ```
 
 ## 分步运行
+
+### 使用旧 MongoDB
+
+默认情况下项目只读写本地 `data/` 目录，不会连接 MongoDB。要使用 `StarDreamAPI` 之前的 MongoDB，需要显式选择 `--storage mongo`，并通过环境变量或命令行传入连接信息：
+
+```bash
+export MONGODB_URL="<your MongoDB connection string>"
+export MONGODB_DB_NAME="<your MongoDB database name>"
+```
+
+初始化旧集合索引：
+
+```bash
+hyper-stats init-mongo --mongo-uri "$MONGODB_URL" --mongo-db "$MONGODB_DB_NAME"
+```
+
+从旧 MongoDB 地址集合读取账户并下载 fills：
+
+```bash
+hyper-stats fetch --storage mongo --limit-addresses 100 --concurrency 3
+```
+
+分析旧 MongoDB 中已有的 fills，并把结果写回旧格式集合：
+
+```bash
+hyper-stats analyze --storage mongo --limit-addresses 100
+```
+
+一键下载并分析：
+
+```bash
+hyper-stats run --storage mongo --limit-addresses 100 --concurrency 3
+```
+
+扫链写入旧 MongoDB 地址集合：
+
+```bash
+hyper-stats scan-blocks --storage mongo --block-count 1000 --concurrency 5
+```
+
+查看旧 MongoDB 地址集合：
+
+```bash
+hyper-stats addresses --storage mongo --limit-addresses 30
+```
+
+兼容的旧集合名：
+
+- `web3_hyperliquid_hyper_x_addresses`
+- `web3_hyperliquid_hyper_x_user_fills`
+- `web3_hyperliquid_hyper_x_user_fills_summary`
+- `web3_hyperliquid_hyper_x_completed_trades`
+- `web3_hyperliquid_hyper_x_trade_summary`
+- `web3_hyperliquid_hyper_x_analyze_result`
+
+MongoDB 模式下写入字段会保留旧项目口径：
+
+- 地址集合使用 `ethAddress`，并兼容旧的 `source`、`created_at`、`createdAt` 字段。
+- fills 集合使用 `ethAddress + tid` 唯一键，成交原文写在 `fill` 字段，同时冗余 `coin`、`time`。
+- fills summary 集合使用 `ethAddress`、`lastTime`、`updatedAt`。
+- completed trades 集合使用 `ethAddress`、`completed_trades`、`completed_trade_pnl`、`duration_stats`、`stats_per_asset`、`total_trades`、`winning_trades`、`win_rate`、`win_rate_long`、`win_rate_short` 等旧字段。
+- 新版完整分析结果会额外写入 `analysis_result_v2`，不会覆盖旧字段。
+
+注意：如果旧库某个地址没有 `state.assetPositions` 或 `effective_position_value`，分析仍会运行，但无法准确排除当前未平仓币种，相关多空仓位统计也可能为空。建议先跑一次 `fetch --storage mongo` 更新状态和 fills。
 
 扫链发现账户，并写入本地地址库：
 

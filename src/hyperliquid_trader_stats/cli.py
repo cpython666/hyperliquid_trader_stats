@@ -10,6 +10,7 @@ import aiohttp
 from .analysis import TraderInput, analyze_population, analyze_trader
 from .api import HyperliquidClient
 from .discovery import HyperliquidDiscoveryClient, scan_blocks
+from .mongo_store import MongoStore
 from .storage import FileStore, load_addresses
 from .visualize import render_dashboard
 
@@ -21,21 +22,38 @@ def configure_logging(verbose: bool = False) -> None:
     )
 
 
-def resolve_addresses(args: argparse.Namespace, store: FileStore, *, use_cached_fills: bool = False) -> list[str]:
+async def maybe_await(value):
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+def build_store(args: argparse.Namespace):
+    storage = getattr(args, "storage", "file")
+    if storage == "mongo":
+        return MongoStore(
+            uri=getattr(args, "mongo_uri", None),
+            db_name=getattr(args, "mongo_db", None),
+            report_dir=getattr(args, "data_dir", "data"),
+        )
+    return FileStore(getattr(args, "data_dir", "data"))
+
+
+async def resolve_addresses(args: argparse.Namespace, store, *, use_cached_fills: bool = False) -> list[str]:
     addresses = load_addresses(getattr(args, "addresses", None), getattr(args, "address_file", None))
     limit = getattr(args, "limit_addresses", None)
-    if not addresses and use_cached_fills:
+    if not addresses and use_cached_fills and isinstance(store, FileStore):
         addresses = [path.stem for path in sorted(store.fills_dir.glob("*.json"))]
     if not addresses:
-        addresses = store.load_address_book_addresses(limit=limit)
+        addresses = await maybe_await(store.load_address_book_addresses(limit=limit))
     if limit:
         addresses = addresses[:limit]
     return addresses
 
 
 async def fetch_command(args: argparse.Namespace) -> None:
-    store = FileStore(args.data_dir)
-    addresses = resolve_addresses(args, store)
+    store = build_store(args)
+    addresses = await resolve_addresses(args, store)
     if not addresses:
         raise SystemExit("No addresses provided. Use --addresses, --address-file, or scan-blocks first.")
 
@@ -45,40 +63,45 @@ async def fetch_command(args: argparse.Namespace) -> None:
     async with aiohttp.ClientSession() as session:
         async def fetch_one(address: str) -> None:
             async with semaphore:
-                start_time = store.last_fill_time(address) if args.incremental else 0
+                start_time = await maybe_await(store.last_fill_time(address)) if args.incremental else 0
                 logging.info("fetching %s from start_time=%s", address, start_time)
                 fills_task = client.fetch_user_fills(session, address, start_time=start_time)
                 state_task = client.fetch_user_state(session, address)
                 fills, state = await asyncio.gather(fills_task, state_task)
-                merged = store.merge_save_fills(address, fills)
-                store.save_state(
-                    address,
-                    {
-                        "raw": state.raw,
-                        "open_position_coins": state.open_position_coins,
-                        "effective_position_value": state.effective_position_value,
-                    },
+                merged = await maybe_await(store.merge_save_fills(address, fills))
+                await maybe_await(
+                    store.save_state(
+                        address,
+                        {
+                            "raw": state.raw,
+                            "open_position_coins": state.open_position_coins,
+                            "effective_position_value": state.effective_position_value,
+                        },
+                    )
                 )
                 logging.info("saved %s fills for %s (%s new)", len(merged), address, len(fills))
 
         await asyncio.gather(*(fetch_one(address) for address in addresses))
 
 
-def analyze_command(args: argparse.Namespace) -> None:
-    store = FileStore(args.data_dir)
-    addresses = resolve_addresses(args, store, use_cached_fills=True)
+async def analyze_command(args: argparse.Namespace) -> None:
+    store = build_store(args)
+    addresses = await resolve_addresses(args, store, use_cached_fills=True)
     if not addresses:
         raise SystemExit("No cached fills found. Run fetch first or pass --addresses.")
 
     results = []
     for address in addresses:
-        fills = store.load_fills(address)
-        state = {}
-        state_path = store.state_path(address)
-        if state_path.exists():
-            import json
+        fills = await maybe_await(store.load_fills(address))
+        if hasattr(store, "load_state"):
+            state = await maybe_await(store.load_state(address))
+        else:
+            state = {}
+            state_path = store.state_path(address)
+            if state_path.exists():
+                import json
 
-            state = json.loads(state_path.read_text(encoding="utf-8"))
+                state = json.loads(state_path.read_text(encoding="utf-8"))
         trader = TraderInput(
             address=address,
             fills=fills,
@@ -86,7 +109,7 @@ def analyze_command(args: argparse.Namespace) -> None:
             effective_position_value=state.get("effective_position_value"),
         )
         result = analyze_trader(trader)
-        store.save_result(address, result)
+        await maybe_await(store.save_result(address, result))
         results.append(result)
         logging.info(
             "analyzed %s trades=%s win_rate=%s net_pnl=%s",
@@ -97,7 +120,7 @@ def analyze_command(args: argparse.Namespace) -> None:
         )
 
     population = analyze_population(results)
-    paths = store.export_reports(results, population)
+    paths = await maybe_await(store.export_reports(results, population))
     dashboard_path = render_dashboard(results, population, Path(args.output))
     logging.info("summary: %s", paths["summary_csv"])
     logging.info("trades: %s", paths["trades_csv"])
@@ -106,11 +129,11 @@ def analyze_command(args: argparse.Namespace) -> None:
 
 async def run_command(args: argparse.Namespace) -> None:
     await fetch_command(args)
-    analyze_command(args)
+    await analyze_command(args)
 
 
 async def scan_blocks_command(args: argparse.Namespace) -> None:
-    store = FileStore(args.data_dir)
+    store = build_store(args)
     client = HyperliquidDiscoveryClient(
         explorer_url=args.explorer_url,
         explorer_ws_url=args.explorer_ws_url,
@@ -138,22 +161,22 @@ async def scan_blocks_command(args: argparse.Namespace) -> None:
                     int(metadata_by_address.get(address, {}).get("last_block_height", 0)),
                 )
             }
-    stats = store.upsert_addresses(addresses, source="block_scan", metadata_by_address=metadata_by_address)
+    stats = await maybe_await(store.upsert_addresses(addresses, source="block_scan", metadata_by_address=metadata_by_address))
     logging.info(
         "address book updated: new=%s updated=%s total=%s files=%s",
         stats["new"],
         stats["updated"],
         stats["total"],
-        store.address_book_path,
+        getattr(store, "address_book_path", "MongoDB"),
     )
 
 
 async def leaderboard_command(args: argparse.Namespace) -> None:
-    store = FileStore(args.data_dir)
+    store = build_store(args)
     client = HyperliquidDiscoveryClient(leaderboard_url=args.leaderboard_url)
     async with aiohttp.ClientSession() as session:
         addresses = await client.fetch_leaderboard_addresses(session)
-    stats = store.upsert_addresses(addresses, source="leaderboard")
+    stats = await maybe_await(store.upsert_addresses(addresses, source="leaderboard"))
     logging.info(
         "address book updated from leaderboard: fetched=%s new=%s updated=%s total=%s",
         len(addresses),
@@ -163,15 +186,21 @@ async def leaderboard_command(args: argparse.Namespace) -> None:
     )
 
 
-def list_addresses_command(args: argparse.Namespace) -> None:
-    store = FileStore(args.data_dir)
-    records = store.load_address_records()
+async def list_addresses_command(args: argparse.Namespace) -> None:
+    store = build_store(args)
+    records = await maybe_await(store.load_address_records())
     records.sort(key=lambda item: int(item.get("seen_count", 0)), reverse=True)
     limit = args.limit_addresses or 50
     print(f"total addresses: {len(records)}")
     for record in records[:limit]:
         sources = ",".join(record.get("sources", []))
         print(f"{record.get('ethAddress')} seen={record.get('seen_count', 0)} sources={sources}")
+
+
+async def init_mongo_command(args: argparse.Namespace) -> None:
+    store = MongoStore(uri=args.mongo_uri, db_name=args.mongo_db, report_dir=args.data_dir)
+    await store.init_indexes()
+    logging.info("MongoDB indexes initialized for legacy HyperX collections")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -187,6 +216,9 @@ def build_parser() -> argparse.ArgumentParser:
     shared.add_argument("--data-dir", default="data", help="Local cache directory.")
     shared.add_argument("--output", default="data/reports/dashboard.html", help="Dashboard HTML output path.")
     shared.add_argument("--limit-addresses", type=int, help="Limit addresses loaded from args, file, or address book.")
+    shared.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
+    shared.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
+    shared.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
 
     fetch_shared = argparse.ArgumentParser(add_help=False)
     fetch_shared.add_argument("--info-url", default="https://api.hyperliquid.xyz/info")
@@ -200,6 +232,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("run", parents=[shared, fetch_shared], help="Fetch, analyze, and render reports.")
     scan_parser = subparsers.add_parser("scan-blocks", help="Scan Hyperliquid explorer blocks and add user accounts to the local address book.")
     scan_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
+    scan_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
+    scan_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
+    scan_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
     scan_parser.add_argument("--start-height", type=int, help="Start block height. Defaults to latest explorer block.")
     scan_parser.add_argument("--block-count", type=int, default=1000, help="Number of blocks to scan backwards.")
     scan_parser.add_argument("--concurrency", type=int, default=5, help="Concurrent block requests.")
@@ -208,11 +243,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     leaderboard_parser = subparsers.add_parser("discover-leaderboard", help="Import Hyperliquid leaderboard accounts into the local address book.")
     leaderboard_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
+    leaderboard_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
+    leaderboard_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
+    leaderboard_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
     leaderboard_parser.add_argument("--leaderboard-url", default="https://stats-data.hyperliquid.xyz/Mainnet/leaderboard")
 
     addresses_parser = subparsers.add_parser("addresses", help="List accounts currently stored in the local address book.")
     addresses_parser.add_argument("--data-dir", default="data", help="Local cache directory.")
+    addresses_parser.add_argument("--storage", choices=["file", "mongo"], default="file", help="Storage backend.")
+    addresses_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
+    addresses_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
     addresses_parser.add_argument("--limit-addresses", type=int, help="Maximum rows to print.")
+
+    init_mongo_parser = subparsers.add_parser("init-mongo", help="Create indexes for the legacy StarDreamAPI HyperX MongoDB collections.")
+    init_mongo_parser.add_argument("--data-dir", default="data", help="Local report directory.")
+    init_mongo_parser.add_argument("--mongo-uri", help="MongoDB URI. Defaults to MONGODB_URL.")
+    init_mongo_parser.add_argument("--mongo-db", help="MongoDB database name. Defaults to MONGODB_DB_NAME.")
     return parser
 
 
@@ -223,7 +269,7 @@ def main() -> None:
     if args.command == "fetch":
         asyncio.run(fetch_command(args))
     elif args.command == "analyze":
-        analyze_command(args)
+        asyncio.run(analyze_command(args))
     elif args.command == "run":
         asyncio.run(run_command(args))
     elif args.command == "scan-blocks":
@@ -231,7 +277,9 @@ def main() -> None:
     elif args.command == "discover-leaderboard":
         asyncio.run(leaderboard_command(args))
     elif args.command == "addresses":
-        list_addresses_command(args)
+        asyncio.run(list_addresses_command(args))
+    elif args.command == "init-mongo":
+        asyncio.run(init_mongo_command(args))
     else:
         parser.error(f"unknown command: {args.command}")
 

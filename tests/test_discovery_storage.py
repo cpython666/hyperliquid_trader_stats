@@ -1,6 +1,7 @@
 import json
 
 from hyperliquid_trader_stats.discovery import extract_user_addresses, is_eth_address
+from hyperliquid_trader_stats.mongo_store import _completed_trade_payload
 from hyperliquid_trader_stats.storage import FileStore
 
 
@@ -60,3 +61,50 @@ def test_file_store_upserts_address_book(tmp_path):
     assert store.address_book_csv_path.exists()
     assert store.address_book_txt_path.exists()
 
+
+def test_completed_trade_payload_keeps_legacy_mongo_fields():
+    result = {
+        "summary": {
+            "address": "0xabc",
+            "total_trades": 1,
+            "winning_trades": 1,
+            "win_rate": 100.0,
+            "win_rate_score": 69.31,
+            "win_rate_wilson_lower_bound": 20.65,
+            "win_rate_long": 100.0,
+            "win_rate_short": 0.0,
+            "gross_pnl": 20.0,
+            "fees": 2.0,
+            "net_pnl": 18.0,
+            "avg_duration_minutes": 1.0,
+            "median_duration_minutes": 1.0,
+        },
+        "trades": [
+            {
+                "coin": "BTC",
+                "direction": "Long",
+                "closed_pnl": 20.0,
+                "fees": 2.0,
+                "net_pnl": 18.0,
+                "entry_value": 10000.0,
+            }
+        ],
+        "per_asset": {
+            "BTC": {
+                "total_pnl": 20.0,
+                "fees": 2.0,
+                "net_pnl": 18.0,
+                "trades": 1,
+            }
+        },
+    }
+
+    payload = _completed_trade_payload("0xabc", result)
+
+    assert payload["ethAddress"] == "0xabc"
+    assert payload["completed_trades"] == result["trades"]
+    assert payload["completed_trade_pnl"]["net"] == 18.0
+    assert payload["stats_per_asset"]["BTC"]["number_of_trades"] == 1
+    assert payload["total_trades"] == 1
+    assert payload["win_rate"] == 100.0
+    assert "analysis_result_v2" in payload
