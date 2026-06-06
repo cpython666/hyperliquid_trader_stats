@@ -250,9 +250,13 @@ async def aggregate_user_orders(address: str, open_position_coins: list = None) 
         # 请求 API 获取后续交易记录
         async with aiohttp.ClientSession() as session:
             new_fills = await fetch_user_fills(session, address, start_time=last_time)
+            if new_fills is None:
+                logger.warning(f"🌐 地址 {address} 从 API 获取新交易记录失败，使用数据库历史记录继续聚合")
+                new_fills = []
             new_fills = [_ for _ in new_fills if _["tid"] not in historical_tid_lst]
             logger.info(f"🌐 地址 {address} 从 API 获取 {len(new_fills)} 条新交易记录")
-            await store_fills(address, new_fills)
+            if new_fills:
+                await store_fills(address, new_fills)
         # 拼接历史和新记录
         all_fills = historical_fills + new_fills
         logger.info(f"🔗 地址 {address} 总计 {len(all_fills)} 条交易记录")

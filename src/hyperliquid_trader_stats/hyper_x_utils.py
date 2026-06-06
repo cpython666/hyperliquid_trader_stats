@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Union
+from typing import Optional, Union
 
 import aiohttp
 from datetime import datetime
@@ -197,7 +197,7 @@ async def bulk_update_user_state(addresses: list, batch_size=100):
 
 
 async def fetch_user_fills(session: aiohttp.ClientSession, address: str, start_time: int = 0, retries=3,
-                           timeout=10) -> list:
+                           timeout=10) -> Optional[list]:
     """
     分页获取用户的交易历史（userFills），支持增量采集，保留原始数据。
 
@@ -209,7 +209,7 @@ async def fetch_user_fills(session: aiohttp.ClientSession, address: str, start_t
         timeout: int，单次请求超时时间（秒）
 
     返回：
-        list，包含所有去重后的交易记录
+        list，包含所有去重后的交易记录；请求失败时返回 None；无新交易时返回空列表。
     """
     all_fills = []
     seen_tids = set()
@@ -231,6 +231,13 @@ async def fetch_user_fills(session: aiohttp.ClientSession, address: str, start_t
                     if response.status == 200:
                         data = await response.json()
                         fills = data.get("fills", []) if isinstance(data, dict) else data
+                        if fills is None:
+                            fills = []
+                        if not isinstance(fills, list):
+                            raise ValueError(f"响应 fills 类型异常: {type(fills).__name__}")
+                        if not fills:
+                            logger.info(f"地址 {address} 起始时间 {current_start_time} 无新交易记录")
+                            return all_fills
                         new_fills = []
 
                         # 去重并过滤无效记录
@@ -255,12 +262,29 @@ async def fetch_user_fills(session: aiohttp.ClientSession, address: str, start_t
                         await asyncio.sleep(61)
                     else:
                         logger.warning(f"地址 {address} 第 {attempt + 1} 次请求失败，状态码: {response.status}")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"地址 {address} 第 {attempt + 1} 次请求超时，"
+                    f"timeout={timeout}s，起始时间: {current_start_time}"
+                )
             except Exception as e:
-                logger.warning(f"地址 {address} 第 {attempt + 1} 次请求异常: {e}")
+                logger.warning(
+                    f"地址 {address} 第 {attempt + 1} 次请求异常: "
+                    f"{type(e).__name__}: {e!r}"
+                )
             await asyncio.sleep(2)
         else:
-            logger.error(f"地址 {address} 获取交易记录失败")
-            break
+            if all_fills:
+                logger.error(
+                    f"地址 {address} 后续分页连续 {retries} 次获取交易记录失败，"
+                    f"起始时间: {current_start_time}，已保留前面获取到的 {len(all_fills)} 条记录"
+                )
+                return all_fills
+            logger.error(
+                f"地址 {address} 连续 {retries} 次获取交易记录失败，"
+                f"起始时间: {current_start_time}，没有可存储的新记录"
+            )
+            return None
 
     return all_fills
 

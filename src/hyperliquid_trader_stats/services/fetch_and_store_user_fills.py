@@ -33,8 +33,11 @@ async def update_user_fills(addresses: list, batch_size=100):
                 effective_position_value = addr_info.get("effective_position_value", 0)
                 fills = await fetch_user_fills(session, address, start_time=last_time)
 
-                if not fills:
-                    logger.warning(f"⚠️ 地址: {address} 余额 {account_value} 无新交易记录")
+                if fills is None:
+                    logger.error(f"❌ 地址: {address} 余额 {account_value} 获取交易记录失败，跳过本次更新")
+                    continue
+                if len(fills) == 0:
+                    logger.info(f"✅ 地址: {address} 余额 {account_value} 无新交易记录")
                     continue
                 await store_fills(address, fills)
 
