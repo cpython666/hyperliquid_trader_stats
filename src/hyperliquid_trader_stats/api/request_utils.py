@@ -38,6 +38,7 @@ class ChromiumSingleton:
     _tab = None
 
     def __new__(cls):
+        """创建或复用全局 Chromium 浏览器实例。"""
         if cls._instance is None:
             logger.debug("开始初始化 Chromium 单例")
             cls._instance = super(ChromiumSingleton, cls).__new__(cls)
@@ -74,6 +75,7 @@ class ChromiumSingleton:
 
 
 def listen_response(url: str) -> Optional[Any]:
+    """打开页面并轮询正文内容，解析通过浏览器校验后的 JSON 响应。"""
     logger.info(f"开始请求 URL: {url}")
     tab = ChromiumSingleton.get_tab()
 

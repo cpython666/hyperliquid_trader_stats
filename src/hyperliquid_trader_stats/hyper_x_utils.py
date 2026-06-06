@@ -25,6 +25,7 @@ HEADERS = {"Content-Type": "application/json"}
 
 
 async def fetch_user_state(session: aiohttp.ClientSession, address: str, retries=3, timeout=10):
+    """请求单个地址的 clearinghouseState，并按限流/异常策略重试。"""
     json_data = {"type": "clearinghouseState", "user": address}
     for attempt in range(retries):
         try:
@@ -48,6 +49,7 @@ async def fetch_user_state(session: aiohttp.ClientSession, address: str, retries
 
 
 async def save_addresses(addresses: Union[list, set], source="hyperliquid_leaderboard"):
+    """将一批地址按来源批量 upsert 到地址集合。"""
     if not addresses:
         logger.warning("地址数据为空")
         return

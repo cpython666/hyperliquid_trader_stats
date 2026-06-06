@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 async def main(incremental: bool = True):
+    """查询缺少用户状态字段的地址，并批量刷新持仓状态。"""
     # 获取没有 marginSummary 字段的地址
     cursor = web3_hyperliquid_hyper_x_addresses_collection.find(
         # {"effective_position_value": {"$exists": False}}, {"ethAddress": 1}

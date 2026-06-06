@@ -20,6 +20,7 @@ HYPERDASH_TOP_TRADERS_URL = "https://hyperdash.info/api/hyperdash/top-traders-ca
 
 
 async def fetch_and_store_addresses_from_hyperdash_top_traders():
+    """读取或请求 Hyperdash 顶级交易员列表，筛选有效地址并入库。"""
     cache_path = Path(PROJECT_ROOT) / "hyperdash_top_traders.json"
     if cache_path.exists():
         top_traders = json.loads(cache_path.read_text(encoding="utf-8"))

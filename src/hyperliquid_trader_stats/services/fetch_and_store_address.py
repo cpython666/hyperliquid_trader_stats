@@ -15,6 +15,7 @@ LEADERBOARD_API = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 
 
 async def fetch_leaderboard_data(session: aiohttp.ClientSession, retries=3, timeout=10):
+    """请求 Hyperliquid 排行榜接口并返回排行榜行数据。"""
     for attempt in range(retries):
         try:
             client_timeout = aiohttp.ClientTimeout(total=timeout)
@@ -34,6 +35,7 @@ async def fetch_leaderboard_data(session: aiohttp.ClientSession, retries=3, time
 
 
 async def main():
+    """采集排行榜地址并批量写入地址集合。"""
     try:
         async with aiohttp.ClientSession() as session:
             rows = await fetch_leaderboard_data(session)

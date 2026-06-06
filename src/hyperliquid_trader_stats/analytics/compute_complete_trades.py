@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def wilson_lower_bound(wins, total, confidence=0.95):
+    """计算胜率 Wilson 置信区间下界，用于降低小样本高胜率的排序权重。"""
     if total == 0:
         return 0.0
     z = 1.96  # 95%置信度
@@ -269,6 +270,7 @@ async def aggregate_user_orders(address: str, open_position_coins: list = None) 
 
 
 async def get_user_open_position_coins(address: str) -> list:
+    """请求用户当前持仓状态，并返回仍在持仓的币种列表。"""
     async with aiohttp.ClientSession() as session:
         json_data = {"type": "clearinghouseState", "user": address}
         try:

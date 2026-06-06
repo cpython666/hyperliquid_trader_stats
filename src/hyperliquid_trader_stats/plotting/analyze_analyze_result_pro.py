@@ -13,12 +13,14 @@ plt.rcParams['axes.unicode_minus'] = False
 
 
 async def load_data():
+    """按时间升序读取历史分析结果快照。"""
     # 异步加载数据
     cursor = web3_hyperliquid_hyper_x_analyze_result_collection.find().sort("timestamp", 1)
     data = [doc async for doc in cursor]
     return data
 
 async def prepare_data(data):
+    """将总胜率和入场价值分层的多空统计展开为 DataFrame。"""
     # 准备数据
     rows = []
     for entry in data:
@@ -48,6 +50,8 @@ async def prepare_data(data):
 
 async def visualize(mode="group"):
     """
+    按指定模式绘制历史多空分布趋势图。
+
     mode: "group" 每个type一组两图，共多张图；"big" 所有type放一张大图（2x2子图），共两张大图
     """
     data = await load_data()

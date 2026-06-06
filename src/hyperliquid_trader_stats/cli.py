@@ -4,6 +4,7 @@ import logging
 
 
 def configure_logging(verbose: bool = False):
+    """根据命令行参数初始化日志级别和输出格式。"""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -11,18 +12,21 @@ def configure_logging(verbose: bool = False):
 
 
 async def init_db_command(_args):
+    """执行 MongoDB 索引初始化命令。"""
     from hyperliquid_trader_stats.db.collections import init_hyper_x_collections
 
     await init_hyper_x_collections()
 
 
 async def fetch_leaderboard_command(_args):
+    """执行排行榜地址采集命令。"""
     from hyperliquid_trader_stats.services.fetch_and_store_address import main
 
     await main()
 
 
 async def fetch_hyperdash_top_traders_command(_args):
+    """执行 Hyperdash 顶级交易员地址采集命令。"""
     from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_hyperdash_top_traders import (
         fetch_and_store_addresses_from_hyperdash_top_traders,
     )
@@ -31,6 +35,7 @@ async def fetch_hyperdash_top_traders_command(_args):
 
 
 async def fetch_block_addresses_command(args):
+    """按指定区块高度范围采集链上交易地址。"""
     if args.requests:
         from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block_requests import (
             fetch_and_store_addresses_from_block,
@@ -44,12 +49,14 @@ async def fetch_block_addresses_command(args):
 
 
 async def fetch_user_states_command(args):
+    """执行用户持仓状态采集命令。"""
     from hyperliquid_trader_stats.services.fetch_and_store_user_state import main
 
     await main(incremental=args.incremental)
 
 
 async def fetch_user_fills_command(args):
+    """执行用户历史成交采集命令。"""
     from hyperliquid_trader_stats.services.fetch_and_store_user_fills import (
         fetch_and_store_user_fills,
     )
@@ -58,6 +65,7 @@ async def fetch_user_fills_command(args):
 
 
 async def compute_trades_command(args):
+    """执行已完成订单聚合和胜率摘要计算命令。"""
     from hyperliquid_trader_stats.analytics.compute_complete_trades import (
         process_all_addresses_incrementally,
     )
@@ -66,6 +74,7 @@ async def compute_trades_command(args):
 
 
 async def analyze_ls_rate_command(args):
+    """执行胜率与多空分布分析命令。"""
     if args.basic:
         from hyperliquid_trader_stats.plotting.analyze_ls_rate import analyze_ls_rate
     else:
@@ -80,6 +89,7 @@ async def analyze_ls_rate_command(args):
 
 
 async def update_high_winrate_positions_command(_args):
+    """刷新高胜率地址的最新持仓状态。"""
     from hyperliquid_trader_stats.services.update_high_win_rate_user_state import (
         update_high_winrate_positions,
     )
@@ -88,6 +98,7 @@ async def update_high_winrate_positions_command(_args):
 
 
 async def scheduler_command(_args):
+    """执行当前项目内置的状态刷新和分析调度流程。"""
     from hyperliquid_trader_stats.services.run_fetch_states_and_analyze import (
         hyper_x_scheduler,
     )
@@ -96,6 +107,7 @@ async def scheduler_command(_args):
 
 
 def build_parser():
+    """构建 hyper-stats 命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         prog="hyper-stats",
         description="Collect and analyze Hyperliquid trader statistics.",
@@ -199,6 +211,7 @@ def build_parser():
 
 
 def main():
+    """解析命令行参数并分发到对应的异步命令处理函数。"""
     parser = build_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)

@@ -71,6 +71,7 @@ async def update_high_winrate_positions(
 
 
 async def main():
+    """运行高胜率地址持仓刷新流程并捕获主流程异常。"""
     try:
         await update_high_winrate_positions(
             # win_rate_threshold=50,

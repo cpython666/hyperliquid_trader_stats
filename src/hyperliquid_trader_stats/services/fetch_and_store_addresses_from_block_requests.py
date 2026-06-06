@@ -38,6 +38,7 @@ def sync_get_block(height):
 
 
 async def get_addresses(height):
+    """在线程中请求指定区块详情，并保存其中的有效用户地址。"""
     async with SEM:
         data = await asyncio.to_thread(sync_get_block, height)
         if data is None:
@@ -54,6 +55,7 @@ async def get_addresses(height):
 
 
 async def fetch_and_store_addresses_from_block(start_height: int, block_count: int = 1000):
+    """使用 requests 后端从起始区块向前批量扫描地址。"""
     tasks = [
         get_addresses(height)
         for height in range(start_height, start_height - block_count, -1)

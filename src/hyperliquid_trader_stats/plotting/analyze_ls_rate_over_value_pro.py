@@ -309,6 +309,7 @@ async def analyze_winrate_and_positions():
 
 
 def visualize_with_seaborn(result: dict, output_dir: str = "./plots_tmp"):
+    """将按入场价值分层后的胜率和多空分布绘制为汇总图。"""
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns

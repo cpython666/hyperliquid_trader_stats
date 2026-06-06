@@ -5,6 +5,7 @@ from hyperliquid_trader_stats.hyper_x_utils import save_addresses
 
 
 async def get_vaults_followers_users():
+    """从金库集合中提取所有 followers 里的用户地址并去重。"""
     user_set = set()
     cursor = web3_hyperliquid_vaults_collection.find({}, {"followers": 1})
 
@@ -22,6 +23,7 @@ async def get_vaults_followers_users():
 
 
 async def add_addresses_from_vaults():
+    """将金库 followers 用户地址写入统一地址集合。"""
     addresses = await get_vaults_followers_users()
     await save_addresses(addresses)
 

@@ -12,6 +12,7 @@ MAX_RETRIES = 5
 
 
 async def get_addresses(session, height):
+    """请求指定区块详情，提取交易中的有效用户地址并入库。"""
     headers = {
         'Content-Type': 'application/json',
     }
@@ -59,6 +60,7 @@ async def get_addresses(session, height):
 
 
 async def fetch_and_store_addresses_from_block(start_height: int, block_count: int = 1000):
+    """从起始区块向前批量扫描指定数量的区块地址。"""
     async with aiohttp.ClientSession() as session:
         # await get_addresses(session, 651837701)
 
@@ -77,6 +79,7 @@ def get_block_height():
     height_queue = queue.Queue()  # 用于传递高度
 
     def on_message(ws, message):
+        """处理区块订阅消息，并把最新高度写入队列。"""
         try:
             data = json.loads(message)
             if isinstance(data, list) and data:
@@ -89,11 +92,13 @@ def get_block_height():
             print(f"JSON decode error: {e}")
 
     def on_error(ws, error):
+        """处理 WebSocket 错误并通知等待方获取高度失败。"""
         print(f"Error: {error}")
         height_queue.put(None)  # 发生错误时放入None
         ws.close()
 
     def on_open(ws):
+        """连接打开后订阅 explorerBlock 消息。"""
         print("WebSocket opened")
         ws.send(json.dumps({
             "method": "subscribe",
