@@ -11,7 +11,7 @@ import aiohttp
 from datetime import datetime
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
-from hyperliquid_trader_stats.config import API_URL
+from hyperliquid_trader_stats.config import AIOHTTP_PROXY, API_URL
 from hyperliquid_trader_stats.hyper_x_utils import (
     fetch_user_fills,
     store_fills,
@@ -278,7 +278,7 @@ async def get_user_open_position_coins(address: str) -> list:
     async with aiohttp.ClientSession() as session:
         json_data = {"type": "clearinghouseState", "user": address}
         try:
-            async with session.post(API_URL, json=json_data, timeout=10) as response:
+            async with session.post(API_URL, json=json_data, timeout=10, proxy=AIOHTTP_PROXY) as response:
                 if response.status == 200:
                     data = await response.json()
                     return [_["position"]["coin"] for _ in data["assetPositions"]]

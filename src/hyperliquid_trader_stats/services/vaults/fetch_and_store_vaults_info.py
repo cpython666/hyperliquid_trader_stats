@@ -3,6 +3,7 @@ import aiohttp
 import logging
 import time
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
+from hyperliquid_trader_stats.config import AIOHTTP_PROXY
 from hyperliquid_trader_stats.db.collections import web3_hyperliquid_vaults_collection
 
 # 配置日志
@@ -50,7 +51,7 @@ async def fetch_vault_details(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                DETAILS_API_URL, headers=headers, json=json_data
+                DETAILS_API_URL, headers=headers, json=json_data, proxy=AIOHTTP_PROXY
             ) as response:
                 if response.status == 429:
                     raise RateLimitException(f"API 限流: {vault_address}")

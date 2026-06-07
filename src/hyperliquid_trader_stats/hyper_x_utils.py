@@ -6,7 +6,7 @@ from typing import Optional, Union
 import aiohttp
 from datetime import datetime
 from pymongo import UpdateOne
-from hyperliquid_trader_stats.config import API_URL
+from hyperliquid_trader_stats.config import AIOHTTP_PROXY, API_URL
 from hyperliquid_trader_stats.db.collections import web3_hyperliquid_hyper_x_user_fills_collection, web3_hyperliquid_hyper_x_addresses_collection, \
     web3_hyperliquid_hyper_x_user_fills_summary_collection
 
@@ -30,8 +30,13 @@ async def fetch_user_state(session: aiohttp.ClientSession, address: str, retries
     for attempt in range(retries):
         try:
             client_timeout = aiohttp.ClientTimeout(total=timeout)
-            async with session.post(API_URL, headers=HEADERS, json=json_data,
-                                    timeout=client_timeout) as response:
+            async with session.post(
+                API_URL,
+                headers=HEADERS,
+                json=json_data,
+                timeout=client_timeout,
+                proxy=AIOHTTP_PROXY,
+            ) as response:
                 if response.status == 200:
                     data = await response.json()
                     logger.debug(f"获取到地址 {address} 的状态: {data}")
@@ -227,7 +232,8 @@ async def fetch_user_fills(session: aiohttp.ClientSession, address: str, start_t
         for attempt in range(retries):
             try:
                 client_timeout = aiohttp.ClientTimeout(total=timeout)
-                async with session.post(BASE_URL, headers=HEADERS, json=payload, timeout=client_timeout) as response:
+                async with session.post(BASE_URL, headers=HEADERS, json=payload, timeout=client_timeout,
+                                        proxy=AIOHTTP_PROXY) as response:
                     if response.status == 200:
                         data = await response.json()
                         fills = data.get("fills", []) if isinstance(data, dict) else data

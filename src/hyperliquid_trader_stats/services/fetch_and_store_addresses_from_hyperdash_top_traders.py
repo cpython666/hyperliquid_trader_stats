@@ -11,7 +11,7 @@ from pathlib import Path
 import aiohttp
 from web3 import Web3
 
-from hyperliquid_trader_stats.config import PROJECT_ROOT
+from hyperliquid_trader_stats.config import AIOHTTP_PROXY, PROJECT_ROOT
 from hyperliquid_trader_stats.hyper_x_utils import save_addresses
 
 # 请求最大重试次数
@@ -26,7 +26,7 @@ async def fetch_and_store_addresses_from_hyperdash_top_traders():
         top_traders = json.loads(cache_path.read_text(encoding="utf-8"))
     else:
         async with aiohttp.ClientSession() as session:
-            async with session.get(HYPERDASH_TOP_TRADERS_URL) as response:
+            async with session.get(HYPERDASH_TOP_TRADERS_URL, proxy=AIOHTTP_PROXY) as response:
                 response.raise_for_status()
                 top_traders = await response.json()
 

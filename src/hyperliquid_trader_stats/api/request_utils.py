@@ -7,6 +7,8 @@ from curl_cffi import requests
 from typing import Optional, Any
 from scrapy import Selector
 
+from hyperliquid_trader_stats.config import AIOHTTP_PROXY, REQUESTS_PROXIES
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -16,17 +18,23 @@ logger = logging.getLogger(__name__)
 
 def cffi_get(url: str) -> Optional[requests.Response]:
     """使用 curl_cffi 发送 GET 请求，模拟 Chrome 135 浏览器"""
+    response = None
     try:
         print(url)
         headers = {
             "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
         }
-        response = requests.get(url, headers=headers, impersonate="chrome131")
+        response = requests.get(
+            url,
+            headers=headers,
+            impersonate="chrome131",
+            proxies=REQUESTS_PROXIES,
+        )
         logger.info(f"接收响应，状态码: {response.status_code}")
         print(response.status_code)
         return response.json()
     except Exception as e:
-        print("出错了", e,response.text)
+        print("出错了", e, getattr(response, "text", ""))
         return None
 
 
@@ -44,6 +52,11 @@ class ChromiumSingleton:
             cls._instance = super(ChromiumSingleton, cls).__new__(cls)
             # 初始化 Chromium 浏览器
             co = ChromiumOptions().auto_port()
+            if AIOHTTP_PROXY:
+                try:
+                    co.set_proxy(AIOHTTP_PROXY)
+                except Exception as e:
+                    logger.warning(f"设置 Chromium 代理失败，将继续不带浏览器代理启动: {e}")
             cls._chromium = Chromium(co)
             cls._tab = cls._chromium.new_tab()
             # 注册退出清理

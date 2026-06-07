@@ -2,6 +2,7 @@ import asyncio
 import aiohttp
 import logging
 
+from hyperliquid_trader_stats.config import AIOHTTP_PROXY
 from hyperliquid_trader_stats.hyper_x_utils import save_addresses
 
 logging.basicConfig(
@@ -19,7 +20,7 @@ async def fetch_leaderboard_data(session: aiohttp.ClientSession, retries=3, time
     for attempt in range(retries):
         try:
             client_timeout = aiohttp.ClientTimeout(total=timeout)
-            async with session.get(LEADERBOARD_API, timeout=client_timeout) as response:
+            async with session.get(LEADERBOARD_API, timeout=client_timeout, proxy=AIOHTTP_PROXY) as response:
                 if response.status == 200:
                     data = await response.json()
                     rows = data.get("leaderboardRows", [])

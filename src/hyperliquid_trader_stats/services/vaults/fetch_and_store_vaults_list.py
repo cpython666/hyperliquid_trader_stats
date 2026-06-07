@@ -3,6 +3,7 @@ import aiohttp
 import logging
 import time
 from pymongo.operations import UpdateOne
+from hyperliquid_trader_stats.config import AIOHTTP_PROXY
 from hyperliquid_trader_stats.db.collections import web3_hyperliquid_vaults_collection
 
 # 配置日志
@@ -22,7 +23,7 @@ async def fetch_vaults_data():
     """异步从 Hyperliquid API 获取金库排行榜数据"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(API_URL) as response:
+            async with session.get(API_URL, proxy=AIOHTTP_PROXY) as response:
                 if response.status != 200:
                     logger.error(f"API 请求失败: HTTP {response.status}")
                     return None

@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 from web3 import Web3
+from hyperliquid_trader_stats.config import AIOHTTP_PROXY, WEBSOCKET_PROXY_KWARGS
 from hyperliquid_trader_stats.db.collections import web3_hyperliquid_hyper_x_addresses_collection
 from hyperliquid_trader_stats.hyper_x_utils import save_addresses
 
@@ -30,7 +31,8 @@ async def get_addresses(session, height):
                     'https://rpc.hyperliquid.xyz/explorer',
                     json=json_data,
                     headers=headers,
-                    timeout=5
+                    timeout=5,
+                    proxy=AIOHTTP_PROXY
                 ) as response:
 
                     if response.status == 200:
@@ -114,7 +116,7 @@ def get_block_height():
     )
 
     # 在新线程中运行WebSocket，避免阻塞
-    ws_thread = threading.Thread(target=ws.run_forever)
+    ws_thread = threading.Thread(target=ws.run_forever, kwargs=WEBSOCKET_PROXY_KWARGS)
     ws_thread.daemon = True  # 设置为守护线程
     ws_thread.start()
 

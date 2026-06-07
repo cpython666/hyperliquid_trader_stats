@@ -64,6 +64,27 @@ pip install -e .
 | `hyper-stats analyze-ls-rate --visualize-result` | 统计胜率与多空分布并可视化 |
 | `hyper-stats run-scheduler` | 执行当前 fetch/analyze 调度流程 |
 
+## 代理配置
+
+项目默认使用 Clash 本地 HTTP 代理：
+
+```bash
+HYPER_STATS_USE_PROXY=true
+HYPER_STATS_PROXY_URL="http://127.0.0.1:7890"
+```
+
+如需临时关闭代理：
+
+```bash
+HYPER_STATS_USE_PROXY=false hyper-stats fetch-leaderboard
+```
+
+如需改代理端口：
+
+```bash
+HYPER_STATS_PROXY_URL="http://127.0.0.1:7891" hyper-stats fetch-leaderboard
+```
+
 ## 运行快捷命令
 
 下面每个代码块都是独立可运行命令。支持 Markdown 代码块运行按钮的编辑器，可以直接点击对应代码块运行。

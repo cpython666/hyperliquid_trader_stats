@@ -1,6 +1,7 @@
 import asyncio
 import requests
 from web3 import Web3
+from hyperliquid_trader_stats.config import REQUESTS_PROXIES
 from hyperliquid_trader_stats.db.collections import web3_hyperliquid_hyper_x_addresses_collection
 from hyperliquid_trader_stats.hyper_x_utils import save_addresses  # 注意：这个是 async 函数
 
@@ -20,7 +21,7 @@ def sync_get_block(height):
 
     for retry in range(MAX_RETRIES):
         try:
-            response = requests.post(url, json=json_data, headers=headers, timeout=5)
+            response = requests.post(url, json=json_data, headers=headers, timeout=5, proxies=REQUESTS_PROXIES)
             if response.status_code == 200:
                 return response.json()
             elif response.status_code == 429:
