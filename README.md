@@ -49,6 +49,18 @@
 ```bash
 pip install -e .
 ```
+或者从零开始的电脑创建虚拟环境  
+```bash
+cd /usr/local/src/hyperliquid_trader_stats
+
+python3 -m venv venv
+
+source venv/bin/activate
+
+pip install -U pip
+
+pip install -e .
+```
 
 常用命令：
 
