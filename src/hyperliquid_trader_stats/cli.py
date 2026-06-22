@@ -53,17 +53,28 @@ async def fetch_hyperdash_top_traders_command(_args):
 
 
 async def fetch_block_addresses_command(args):
-    """按指定区块高度范围采集链上交易地址。"""
+    """从指定区块或最新区块开始采集链上交易地址。"""
     if args.requests:
         from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block_requests import (
             fetch_and_store_addresses_from_block,
         )
+        from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block import (
+            get_block_height,
+        )
     else:
         from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block import (
             fetch_and_store_addresses_from_block,
+            get_block_height,
         )
 
-    await fetch_and_store_addresses_from_block(args.start_height, args.block_count)
+    start_height = args.start_height
+    if start_height is None:
+        start_height = await asyncio.to_thread(get_block_height)
+        if start_height is None:
+            raise RuntimeError("获取最新区块高度失败，请稍后重试或手动传入起始区块高度。")
+        logging.info("未指定起始区块高度，使用最新区块高度：%s", start_height)
+
+    await fetch_and_store_addresses_from_block(start_height, args.block_count)
 
 
 async def fetch_user_states_command(args):
@@ -163,12 +174,14 @@ def build_parser():
     block_addresses = subparsers.add_parser(
         "fetch-block-addresses",
         help="从区块中采集账户地址。",
-        description="从指定起始区块向前扫描一批 Hyperliquid explorer 区块，并保存其中的用户地址。",
+        description="从指定起始区块向前扫描一批 Hyperliquid explorer 区块，并保存其中的用户地址；不传起始高度时自动使用最新区块高度。",
     )
     block_addresses.add_argument(
         "start_height",
+        nargs="?",
         type=int,
-        help="起始区块高度，会从该高度向前扫描。",
+        default=None,
+        help="起始区块高度；省略时自动获取最新区块高度。",
     )
     block_addresses.add_argument(
         "--block-count",

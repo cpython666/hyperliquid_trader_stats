@@ -57,7 +57,7 @@ pip install -e .
 | `hyper-stats init-db` | 初始化 HyperX 相关 MongoDB 索引 |
 | `hyper-stats fetch-leaderboard` | 采集排行榜用户地址入库 |
 | `hyper-stats fetch-hyperdash-top-traders` | 采集 Hyperdash top trader 地址入库 |
-| `hyper-stats fetch-block-addresses <start_height>` | 从区块中采集地址 |
+| `hyper-stats fetch-block-addresses [start_height]` | 从区块中采集地址；省略高度时从最新区块开始 |
 | `hyper-stats fetch-user-states` | 采集用户持仓状态 |
 | `hyper-stats fetch-user-fills --limit 30000 --incremental` | 获取用户历史成交 |
 | `hyper-stats compute-trades` | 计算已完成订单与胜率摘要 |
@@ -124,6 +124,32 @@ cd /Users/cpython666/git_pro/hyperliquid-trader-stats
 hyper-stats fetch-hyperdash-top-traders
 ```
 
+### 从区块采集地址
+
+不传区块高度时，会自动获取最新区块高度并向前扫描：
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats fetch-block-addresses
+```
+
+也可以手动指定起始区块高度：
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats fetch-block-addresses 651879309
+```
+
+默认向前扫描 1000 个区块，可通过 `--block-count` 调整。
+
+参数说明：
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `start_height` | 可选的起始区块高度，例如 `651879309`；省略时自动获取最新区块高度。 |
+| `--block-count 1000` | 从起始高度向前扫描的区块数量，默认 1000。 |
+| `--requests` | 改用 requests 后端采集区块，可在默认 aiohttp 方式异常时备用。 |
+
 ### 采集用户持仓状态
 
 ```bash
@@ -136,6 +162,20 @@ hyper-stats fetch-user-states
 ```bash
 cd /Users/cpython666/git_pro/hyperliquid-trader-stats
 hyper-stats fetch-user-fills --limit 30000 --incremental
+```
+
+参数说明：
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `--limit 30000` | 本次最多处理 30000 个符合条件的用户地址；CLI 默认值就是 30000，可按需要调小。排除金库地址后，实际处理数量可能更少。 |
+| `--incremental` | 只处理尚未出现在 fills 摘要表中的新增地址。这是默认模式，因此可以省略该参数。 |
+| `--no-incremental` | 从符合条件的地址中重新选择用户进行更新；已有用户会从摘要表记录的 `lastTime` 之后继续拉取，而不是重复下载全部历史成交。 |
+
+所以下面这条命令与上面的示例等价：
+
+```bash
+hyper-stats fetch-user-fills
 ```
 
 ### 计算已完成订单和胜率
@@ -151,6 +191,14 @@ hyper-stats compute-trades
 cd /Users/cpython666/git_pro/hyperliquid-trader-stats
 hyper-stats analyze-ls-rate --visualize-result
 ```
+
+参数说明：
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `--visualize-result` | 生成分析结果图表；默认不生成。 |
+| `--store-result` / `--no-store-result` | 是否将分析结果写入 MongoDB，默认写入。 |
+| `--basic` | 使用不按入场价值区间细分的基础分析器；默认使用进阶分析器。 |
 
 ### 执行内置调度流程
 
