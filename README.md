@@ -64,17 +64,18 @@ pip install -e .
 
 常用命令：
 
-| 命令 | 作用 |
-| ---- | ---- |
-| `hyper-stats init-db` | 初始化 HyperX 相关 MongoDB 索引 |
-| `hyper-stats fetch-leaderboard` | 采集排行榜用户地址入库 |
-| `hyper-stats fetch-hyperdash-top-traders` | 采集 Hyperdash top trader 地址入库 |
-| `hyper-stats fetch-block-addresses [start_height]` | 从区块中采集地址；省略高度时从最新区块开始 |
-| `hyper-stats fetch-user-states` | 采集用户持仓状态 |
-| `hyper-stats fetch-user-fills --limit 30000 --incremental` | 获取用户历史成交 |
-| `hyper-stats compute-trades` | 计算已完成订单与胜率摘要 |
-| `hyper-stats analyze-ls-rate --visualize-result` | 统计胜率与多空分布并可视化 |
-| `hyper-stats run-scheduler` | 执行当前 fetch/analyze 调度流程 |
+| 命令                                                             | 作用                           |
+|----------------------------------------------------------------|------------------------------|
+| `hyper-stats init-db`                                          | 初始化 HyperX 相关 MongoDB 索引     |
+| `hyper-stats fetch-leaderboard`                                | 采集排行榜用户地址入库                  |
+| `hyper-stats fetch-hyperdash-top-traders`                      | 采集 Hyperdash top trader 地址入库 |
+| `hyper-stats fetch-block-addresses [start_height]`             | 从区块中采集地址；省略高度时从最新区块开始        |
+| `hyper-stats fetch-user-states`                                | 采集用户持仓状态                     |
+| `hyper-stats fetch-user-fills --limit 30000 --incremental`     | 增量获取用户历史成交                   |
+| `hyper-stats fetch-user-fills --limit 100000 --no-incremental` | 全量获取用户历史成交                   |
+| `hyper-stats compute-trades`                                   | 计算已完成订单与胜率摘要                 |
+| `hyper-stats analyze-ls-rate --visualize-result`               | 统计胜率与多空分布并可视化                |
+| `hyper-stats run-scheduler`                                    | 执行当前 fetch/analyze 调度流程      |
 
 ## 代理配置
 
@@ -188,6 +189,23 @@ hyper-stats fetch-user-fills --limit 30000 --incremental
 
 ```bash
 hyper-stats fetch-user-fills
+```
+
+```bash
+# 服务器后台运行
+nohup hyper-stats fetch-user-fills --limit 100000 --no-incremental > fetch.log 2>&1 &
+# 快捷重新运行
+pkill -f "fetch-user-fills"
+nohup hyper-stats fetch-user-fills --limit 100000 --no-incremental > fetch.log 2>&1 &
+#其他命令
+#查看日志
+tail -f fetch.log
+#查看进程
+ps -ef | grep "fetch-user-fills"
+#停止任务
+kill PID
+#强制停止：
+kill -9 PID
 ```
 
 ### 计算已完成订单和胜率
