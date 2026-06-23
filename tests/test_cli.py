@@ -19,6 +19,14 @@ def test_cli_parses_fetch_user_fills_options():
     assert args.incremental is False
 
 
+def test_cli_parses_large_index_initialization_option():
+    parser = build_parser()
+
+    args = parser.parse_args(["init-db", "--include-large-indexes"])
+
+    assert args.include_large_indexes is True
+
+
 def test_cli_exposes_expected_commands():
     parser = build_parser()
     subparser_action = next(

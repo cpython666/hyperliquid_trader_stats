@@ -29,11 +29,11 @@ def configure_logging(verbose: bool = False):
     )
 
 
-async def init_db_command(_args):
+async def init_db_command(args):
     """执行 MongoDB 索引初始化命令。"""
     from hyperliquid_trader_stats.db.collections import init_hyper_x_collections
 
-    await init_hyper_x_collections()
+    await init_hyper_x_collections(include_large_indexes=args.include_large_indexes)
 
 
 async def fetch_leaderboard_command(_args):
@@ -154,6 +154,11 @@ def build_parser():
         "init-db",
         help="初始化 MongoDB 索引。",
         description="创建 HyperX 相关集合需要的 MongoDB 索引。",
+    )
+    init_db.add_argument(
+        "--include-large-indexes",
+        action="store_true",
+        help="同时创建超大 fills 集合的时间索引，可能耗时较长并占用大量磁盘。",
     )
     init_db.set_defaults(handler=init_db_command)
 
