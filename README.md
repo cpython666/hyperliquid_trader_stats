@@ -123,6 +123,18 @@ cd /Users/cpython666/git_pro/hyperliquid-trader-stats
 hyper-stats init-db
 ```
 
+该命令可以重复执行：已存在且定义相同的索引会被跳过。默认不创建超大 `user_fills` 集合的 `(ethAddress, time)` 索引，避免在数据量较大时长时间占用 MongoDB 资源或导致连接中断。
+
+如已预留足够的磁盘空间和维护时间，可显式创建大表索引：
+
+```bash
+hyper-stats init-db --include-large-indexes
+```
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `--include-large-indexes` | 同时创建 `user_fills` 的 `(ethAddress, time)` 索引；在超大集合上可能耗时很长，建议仅在低峰维护窗口执行。 |
+
 ### 采集排行榜地址
 
 ```bash
@@ -213,6 +225,26 @@ kill -9 PID
 ```bash
 cd /Users/cpython666/git_pro/hyperliquid-trader-stats
 hyper-stats compute-trades
+```
+
+参数说明：
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `--incremental` | 只计算尚未生成胜率结果的地址。这是默认模式，可以省略该参数。 |
+| `--no-incremental` | 重新计算 fills 集合中的全部地址，适合计算逻辑变更后刷新历史结果；数据量较大时会耗费更长时间。 |
+
+以下两条增量计算命令等价：
+
+```bash
+hyper-stats compute-trades
+hyper-stats compute-trades --incremental
+```
+
+需要全量重算时使用：
+
+```bash
+hyper-stats compute-trades --no-incremental
 ```
 
 ### 分析胜率与多空分布
