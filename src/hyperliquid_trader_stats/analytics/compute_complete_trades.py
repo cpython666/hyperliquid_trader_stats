@@ -273,22 +273,86 @@ async def aggregate_user_orders(address: str, open_position_coins: list = None) 
         return []
 
 
-async def get_user_open_position_coins(address: str) -> list:
-    """请求用户当前持仓状态，并返回仍在持仓的币种列表。"""
+async def get_user_open_position_coins(
+    address: str,
+    retries: int = 3,
+    timeout: int = 30,
+    retry_delay: int = 2,
+) -> list:
+    """请求用户当前持仓状态，失败时有限重试，并返回仍在持仓的币种列表。"""
+    if retries < 1:
+        raise ValueError("retries 必须大于等于 1")
+
+    json_data = {"type": "clearinghouseState", "user": address}
+    last_error = None
+
     async with aiohttp.ClientSession() as session:
-        json_data = {"type": "clearinghouseState", "user": address}
-        try:
-            async with session.post(API_URL, json=json_data, timeout=10, proxy=AIOHTTP_PROXY) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return [_["position"]["coin"] for _ in data["assetPositions"]]
-                elif response.status == 429:
-                    logger.warning(f"获取 {address} 的数据时被限流，睡眠 61 秒")
-                    await asyncio.sleep(61)
-                    return await get_user_open_position_coins(address)
-        except aiohttp.ClientError as e:
-            logger.error(f"获取 {address} 的数据时出错: {e}")
-            raise Exception(f"获取 {address} 的数据时出错: {e}")
+        for attempt in range(1, retries + 1):
+            wait_seconds = retry_delay * (2 ** (attempt - 1))
+            try:
+                async with session.post(
+                    API_URL,
+                    json=json_data,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                    proxy=AIOHTTP_PROXY,
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if not isinstance(data, dict):
+                            raise ValueError("持仓接口返回的数据不是对象")
+
+                        positions = data.get("assetPositions", [])
+                        if not isinstance(positions, list):
+                            raise ValueError("持仓接口返回的 assetPositions 不是列表")
+
+                        return [
+                            coin
+                            for item in positions
+                            if isinstance(item, dict)
+                            for position in [item.get("position", {})]
+                            if isinstance(position, dict)
+                            for coin in [position.get("coin")]
+                            if coin
+                        ]
+
+                    if response.status == 429:
+                        retry_after = response.headers.get("Retry-After", "61")
+                        try:
+                            wait_seconds = max(float(retry_after), 0)
+                        except (TypeError, ValueError):
+                            wait_seconds = 61
+                        last_error = RuntimeError("HTTP 429 Too Many Requests")
+                    else:
+                        response_text = (await response.text())[:200]
+                        last_error = RuntimeError(
+                            f"HTTP {response.status}: {response_text}"
+                        )
+
+                    logger.warning(
+                        "获取 %s 的持仓失败（第 %s/%s 次）：%s",
+                        address,
+                        attempt,
+                        retries,
+                        last_error,
+                    )
+            except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as error:
+                last_error = error
+                logger.warning(
+                    "获取 %s 的持仓异常（第 %s/%s 次）：%s: %s",
+                    address,
+                    attempt,
+                    retries,
+                    type(error).__name__,
+                    error,
+                )
+
+            if attempt < retries:
+                logger.info("等待 %.1f 秒后重试地址 %s", wait_seconds, address)
+                await asyncio.sleep(wait_seconds)
+
+    message = f"获取 {address} 的持仓失败，已重试 {retries} 次"
+    logger.error(message)
+    raise RuntimeError(message) from last_error
 
 
 async def compute_complete_trades_and_store(address: str, store=True):
