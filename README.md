@@ -231,8 +231,12 @@ hyper-stats compute-trades
 
 | 参数 | 作用 |
 | ---- | ---- |
-| `--incremental` | 只计算尚未生成胜率结果的地址。这是默认模式，可以省略该参数。 |
+| `--incremental` | 根据 `fills_summary.lastTime` 和 `completed_trades.processedThroughTime` 只计算有新成交或尚未生成结果的地址。这是默认模式，可以省略。 |
 | `--no-incremental` | 重新计算 fills 集合中的全部地址，适合计算逻辑变更后刷新历史结果；数据量较大时会耗费更长时间。 |
+| `--stale-days 7` | 重新计算超过指定天数未更新以及尚未生成结果的地址。 |
+| `--updated-before 2026-06-01` | 重新计算指定 UTC 日期之前更新以及尚未生成结果的地址，日期格式为 `YYYY-MM-DD`。 |
+
+`--incremental`、`--no-incremental`、`--stale-days` 和 `--updated-before` 是互斥模式，一次只能选择一种。
 
 以下两条增量计算命令等价：
 
@@ -245,6 +249,18 @@ hyper-stats compute-trades --incremental
 
 ```bash
 hyper-stats compute-trades --no-incremental
+```
+
+更新超过 7 天未计算的地址：
+
+```bash
+hyper-stats compute-trades --stale-days 7
+```
+
+更新指定日期之前计算过的地址：
+
+```bash
+hyper-stats compute-trades --updated-before 2026-06-01
 ```
 
 ### 分析胜率与多空分布

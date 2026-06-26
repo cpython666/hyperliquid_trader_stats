@@ -97,6 +97,11 @@ async def init_hyper_x_collections(include_large_indexes: bool = False):
     )
     await _ensure_index(
         web3_hyperliquid_hyper_x_completed_trades_collection,
+        [("updated_at", ASCENDING), ("ethAddress", ASCENDING)],
+        name="updated_at_eth_address",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_completed_trades_collection,
         [("win_rate", DESCENDING), ("ethAddress", ASCENDING)],
         name="win_rate_desc_eth_address",
     )

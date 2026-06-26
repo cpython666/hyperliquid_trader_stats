@@ -1,6 +1,26 @@
 import argparse
 import asyncio
 import logging
+from datetime import datetime
+
+
+def positive_int(value: str) -> int:
+    """解析大于零的整数命令行参数。"""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("必须是大于零的整数。") from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("必须是大于零的整数。")
+    return parsed
+
+
+def utc_date(value: str) -> datetime:
+    """将 YYYY-MM-DD 命令行参数解析为 UTC 零点。"""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("日期格式必须为 YYYY-MM-DD。") from error
 
 
 class ChineseArgumentParser(argparse.ArgumentParser):
@@ -99,7 +119,11 @@ async def compute_trades_command(args):
         process_all_addresses_incrementally,
     )
 
-    await process_all_addresses_incrementally(incremental=args.incremental)
+    await process_all_addresses_incrementally(
+        incremental=args.incremental,
+        stale_days=args.stale_days,
+        updated_before=args.updated_before,
+    )
 
 
 async def analyze_ls_rate_command(args):
@@ -238,11 +262,23 @@ def build_parser():
         help="计算已完成订单和胜率摘要。",
         description="从已保存的 fills 推算已完成订单，计算胜率、盈亏、持仓时长等交易员摘要。",
     )
-    compute.add_argument(
+    compute_mode = compute.add_mutually_exclusive_group()
+    compute_mode.add_argument(
         "--incremental",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="是否只计算未处理过的地址；使用 --no-incremental 可重新计算全部地址。",
+        help="按 fills 最新时间增量计算；使用 --no-incremental 可重新计算全部地址。",
+    )
+    compute_mode.add_argument(
+        "--stale-days",
+        type=positive_int,
+        help="重新计算超过指定天数未更新的地址，例如 7。",
+    )
+    compute_mode.add_argument(
+        "--updated-before",
+        type=utc_date,
+        metavar="YYYY-MM-DD",
+        help="重新计算在指定 UTC 日期之前更新的地址。",
     )
     compute.set_defaults(handler=compute_trades_command)
 

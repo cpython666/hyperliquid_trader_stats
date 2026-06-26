@@ -58,6 +58,10 @@ def test_init_hyper_x_collections_creates_query_indexes(monkeypatch):
     completed_trades_calls = mocked_collections[
         "web3_hyperliquid_hyper_x_completed_trades_collection"
     ].create_index.await_args_list
+    assert call(
+        [("updated_at", ASCENDING), ("ethAddress", ASCENDING)],
+        name="updated_at_eth_address",
+    ) in completed_trades_calls
     expected_win_rate_indexes = {
         "win_rate_desc_eth_address": "win_rate",
         "win_rate_over_1w_desc_eth_address": (

@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -25,6 +26,45 @@ def test_cli_parses_large_index_initialization_option():
     args = parser.parse_args(["init-db", "--include-large-indexes"])
 
     assert args.include_large_indexes is True
+
+
+def test_cli_parses_compute_trades_stale_days():
+    parser = build_parser()
+
+    args = parser.parse_args(["compute-trades", "--stale-days", "7"])
+
+    assert args.stale_days == 7
+    assert args.updated_before is None
+
+
+def test_cli_parses_compute_trades_updated_before():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        ["compute-trades", "--updated-before", "2026-06-01"]
+    )
+
+    assert args.updated_before == datetime(2026, 6, 1)
+    assert args.stale_days is None
+
+
+def test_cli_rejects_multiple_compute_trades_modes():
+    parser = build_parser()
+
+    try:
+        parser.parse_args(
+            [
+                "compute-trades",
+                "--stale-days",
+                "7",
+                "--updated-before",
+                "2026-06-01",
+            ]
+        )
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("互斥的计算模式参数应解析失败")
 
 
 def test_cli_exposes_expected_commands():

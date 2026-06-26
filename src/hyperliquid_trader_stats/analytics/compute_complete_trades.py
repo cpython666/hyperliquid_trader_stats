@@ -8,7 +8,7 @@ TODO:
 
 import traceback
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from hyperliquid_trader_stats.config import AIOHTTP_PROXY, API_URL
@@ -22,8 +22,10 @@ from pprint import pprint
 import asyncio
 import logging
 import math
+from typing import Optional
 from hyperliquid_trader_stats.db.collections import (
     web3_hyperliquid_hyper_x_user_fills_collection,
+    web3_hyperliquid_hyper_x_user_fills_summary_collection,
     web3_hyperliquid_hyper_x_completed_trades_collection,
 )
 
@@ -220,7 +222,10 @@ def merge_and_aggregate(fills, open_position_coins: list = None):
     return aggregated
 
 
-async def aggregate_user_orders(address: str, open_position_coins: list = None) -> list:
+async def aggregate_user_orders(
+    address: str,
+    open_position_coins: list = None,
+) -> tuple[list, int]:
     """
     查询指定地址的交易历史，获取后续成交记录并聚合已完成订单。
 
@@ -230,7 +235,7 @@ async def aggregate_user_orders(address: str, open_position_coins: list = None) 
         ⚠️ update_fills: bool，是否更新订单. 必须更新订单最新状态，不然忽略目前持仓的时候可能会导致遗漏历史订单
 
     返回：
-        list，聚合后的已完成订单列表
+        tuple，聚合后的已完成订单列表和本次处理到的最新 fills 时间戳
     """
     try:
         # 查询数据库中的历史交易记录
@@ -263,14 +268,21 @@ async def aggregate_user_orders(address: str, open_position_coins: list = None) 
 
         if not all_fills:
             logger.warning(f"⚠️ 地址 {address} 无交易记录")
-            return []
+            return [], 0
 
         # 调用 merge_and_aggregate 聚合订单
-        return merge_and_aggregate(all_fills, open_position_coins)
+        processed_through_time = max(
+            (fill.get("time", 0) for fill in all_fills),
+            default=0,
+        )
+        return (
+            merge_and_aggregate(all_fills, open_position_coins),
+            int(processed_through_time),
+        )
 
     except Exception as e:
         logger.error(f"❗处理地址 {address} 时发生异常: {e}")
-        return []
+        return [], 0
 
 
 async def get_user_open_position_coins(
@@ -366,7 +378,10 @@ async def compute_complete_trades_and_store(address: str, store=True):
         None 或其他结果
     """
     open_position_coins = await get_user_open_position_coins(address)  # 持仓币种
-    orders = await aggregate_user_orders(address, open_position_coins)
+    orders, processed_through_time = await aggregate_user_orders(
+        address,
+        open_position_coins,
+    )
 
     if not orders:
         logger.warning("⚠️ 处理后未生成任何聚合订单")
@@ -519,6 +534,7 @@ async def compute_complete_trades_and_store(address: str, store=True):
         "win_rate_long": win_rate_long,
         "win_rate_short": win_rate_short,
         "entry_value_summary": entry_value_summary,
+        "processedThroughTime": processed_through_time,
         "updated_at": datetime.utcnow(),
     }
 
@@ -539,19 +555,92 @@ async def compute_complete_trades_and_store(address: str, store=True):
     return data
 
 
+def _datetime_to_milliseconds(value) -> int:
+    """将毫秒时间戳或 MongoDB datetime 统一转换为 UTC 毫秒时间戳。"""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return int(value.timestamp() * 1000)
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
+def _as_utc_naive(value: datetime) -> datetime:
+    """将 datetime 统一为 MongoDB 默认返回的 UTC 无时区格式。"""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _select_watermark_addresses(
+    addresses: list[str],
+    completed_by_address: dict,
+    last_fill_times: dict,
+) -> list[str]:
+    """选择未计算或 fills 水位高于已处理水位的地址。"""
+    selected = []
+    for address in addresses:
+        completed = completed_by_address.get(address)
+        if completed is None or "win_rate_score" not in completed:
+            selected.append(address)
+            continue
+
+        last_fill_time = _datetime_to_milliseconds(last_fill_times.get(address))
+        processed_through_time = _datetime_to_milliseconds(
+            completed.get("processedThroughTime")
+        )
+        if processed_through_time == 0:
+            # 兼容新增水位字段前生成的历史统计。
+            processed_through_time = _datetime_to_milliseconds(
+                completed.get("updated_at")
+            )
+
+        if last_fill_time > processed_through_time:
+            selected.append(address)
+
+    return selected
+
+
+def _select_stale_addresses(
+    addresses: list[str],
+    completed_addresses: set[str],
+    stale_addresses: set[str],
+) -> list[str]:
+    """选择从未计算或更新时间早于截止时间的地址。"""
+    return [
+        address
+        for address in addresses
+        if address not in completed_addresses or address in stale_addresses
+    ]
+
+
 async def process_all_addresses_incrementally(
     incremental: bool = True,
+    stale_days: Optional[int] = None,
+    updated_before: Optional[datetime] = None,
 ):
     """
-    从 fills 集合中获取所有唯一地址，根据 incremental 参数决定是否增量处理未在 trades 集合中的地址，
+    从 fills 集合获取所有唯一地址，按 fills 水位、过期时间或全量模式筛选，
     然后调用 compute_complete_trades_and_store。
 
     参数：
-        incremental: bool，是否增量处理（仅处理 trades 集合中不存在的地址），默认为 True
+        incremental: bool，是否按 fills 水位增量处理，默认为 True
+        stale_days: int，重新计算超过指定天数未更新的地址
+        updated_before: datetime，重新计算该 UTC 时间之前更新的地址
 
     返回：
         None
     """
+    if stale_days is not None and updated_before is not None:
+        raise ValueError("stale_days 和 updated_before 不能同时使用")
+    if not incremental and (stale_days is not None or updated_before is not None):
+        raise ValueError("全量模式不能与过期时间筛选同时使用")
+    if stale_days is not None and stale_days < 1:
+        raise ValueError("stale_days 必须大于零")
+
     try:
         # 获取 fills 集合中的所有唯一 ethAddress
         addresses = await web3_hyperliquid_hyper_x_user_fills_collection.distinct(
@@ -559,23 +648,77 @@ async def process_all_addresses_incrementally(
         )
         logger.info(f"从 fills 集合中获取 {len(addresses)} 个唯一地址")
 
-        # 根据 incremental 参数决定处理的地址列表
-        if incremental:
-            # 获取 trades 集合中已存在的 ethAddress，且 win_rate_score 字段不存在
-            existing_addresses = await web3_hyperliquid_hyper_x_completed_trades_collection.distinct(
-                "ethAddress",
-                {"win_rate_score": {"$exists": True}}
-            )
-            logger.info(f"trades 集合中已有 {len(existing_addresses)} 个地址（已存在 win_rate_score 字段）")
-            # 过滤出未处理的地址
-            addresses_to_process = [
-                addr for addr in addresses if addr not in existing_addresses
-            ]
-            logger.info(f"增量模式：需要处理的地址数: {len(addresses_to_process)}")
-        else:
-            # 处理所有地址
+        cutoff = updated_before
+        if stale_days is not None:
+            cutoff = datetime.utcnow() - timedelta(days=stale_days)
+        if cutoff is not None:
+            cutoff = _as_utc_naive(cutoff)
+
+        if not incremental:
             addresses_to_process = addresses
             logger.info(f"全量模式：需要处理的地址数: {len(addresses_to_process)}")
+        elif cutoff is not None:
+            completed_addresses = set(
+                await web3_hyperliquid_hyper_x_completed_trades_collection.distinct(
+                    "ethAddress"
+                )
+            )
+            stale_cursor = web3_hyperliquid_hyper_x_completed_trades_collection.find(
+                {
+                    "$or": [
+                        {"updated_at": {"$lte": cutoff}},
+                        {"updated_at": {"$exists": False}},
+                    ]
+                },
+                {"ethAddress": 1},
+            )
+            stale_addresses = {
+                doc["ethAddress"] async for doc in stale_cursor
+            }
+            addresses_to_process = _select_stale_addresses(
+                addresses,
+                completed_addresses,
+                stale_addresses,
+            )
+            logger.info(
+                "过期刷新模式（截止 %s UTC）：需要处理的地址数: %s",
+                cutoff,
+                len(addresses_to_process),
+            )
+        else:
+            completed_cursor = (
+                web3_hyperliquid_hyper_x_completed_trades_collection.find(
+                    {},
+                    {
+                        "ethAddress": 1,
+                        "win_rate_score": 1,
+                        "processedThroughTime": 1,
+                        "updated_at": 1,
+                    },
+                )
+            )
+            completed_by_address = {
+                doc["ethAddress"]: doc async for doc in completed_cursor
+            }
+            summary_cursor = (
+                web3_hyperliquid_hyper_x_user_fills_summary_collection.find(
+                    {},
+                    {"ethAddress": 1, "lastTime": 1},
+                )
+            )
+            last_fill_times = {
+                doc["ethAddress"]: doc.get("lastTime", 0)
+                async for doc in summary_cursor
+            }
+            addresses_to_process = _select_watermark_addresses(
+                addresses,
+                completed_by_address,
+                last_fill_times,
+            )
+            logger.info(
+                "fills 水位增量模式：需要处理的地址数: %s",
+                len(addresses_to_process),
+            )
 
         if not addresses_to_process:
             logger.info("✅ 没有需要处理的新地址")
