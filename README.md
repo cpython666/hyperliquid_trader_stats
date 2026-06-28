@@ -75,6 +75,7 @@ pip install -e .
 | `hyper-stats fetch-user-fills --limit 100000 --no-incremental` | 全量获取用户历史成交                   |
 | `hyper-stats compute-trades`                                   | 计算已完成订单与胜率摘要                 |
 | `hyper-stats analyze-ls-rate --visualize-result`               | 统计胜率与多空分布并可视化                |
+| `hyper-stats serve-web`                                        | 启动交易员数据筛选 Web 页面              |
 | `hyper-stats run-scheduler`                                    | 执行当前 fetch/analyze 调度流程      |
 
 ## 代理配置
@@ -277,6 +278,37 @@ hyper-stats analyze-ls-rate --visualize-result
 | `--visualize-result` | 生成分析结果图表；默认不生成。 |
 | `--store-result` / `--no-store-result` | 是否将分析结果写入 MongoDB，默认写入。 |
 | `--basic` | 使用不按入场价值区间细分的基础分析器；默认使用进阶分析器。 |
+
+### 启动 Web 数据筛选页面
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats serve-web
+```
+
+默认访问地址为：
+
+```text
+http://127.0.0.1:8000
+```
+
+页面支持按地址、胜率、交易数、净盈亏、当前有效持仓价值、仓位方向、入场价值分层胜率和更新时间筛选；支持按胜率评分、胜率、Wilson 下界、交易数、净盈亏、持仓价值、账户价值和更新时间排序。
+
+参数说明：
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `--host 127.0.0.1` | Web 服务监听地址，默认 `127.0.0.1`。 |
+| `--port 8000` | Web 服务监听端口，默认 `8000`。 |
+| `--reload` | 开启 uvicorn 自动重载，适合本地开发。 |
+
+后端接口：
+
+| 接口 | 作用 |
+| ---- | ---- |
+| `GET /api/traders` | 分页查询交易员统计，可传筛选和排序参数。 |
+| `GET /api/traders/{address}` | 查看单个地址的完整统计和地址状态。 |
+| `GET /api/health` | 健康检查。 |
 
 ### 执行内置调度流程
 

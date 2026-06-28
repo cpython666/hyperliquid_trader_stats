@@ -159,6 +159,21 @@ async def scheduler_command(_args):
     await hyper_x_scheduler()
 
 
+async def serve_web_command(args):
+    """启动交易员统计 Web 控制台。"""
+    import uvicorn
+
+    config = uvicorn.Config(
+        "hyperliquid_trader_stats.web.app:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 def build_parser():
     """构建 hyper-stats 命令行参数解析器。"""
     parser = ChineseArgumentParser(
@@ -319,6 +334,29 @@ def build_parser():
         description="执行当前项目内置的高胜率地址状态刷新和胜率多空分布分析流程。",
     )
     scheduler.set_defaults(handler=scheduler_command)
+
+    serve_web = subparsers.add_parser(
+        "serve-web",
+        help="启动交易员数据筛选 Web 页面。",
+        description="使用 FastAPI 启动本地 Web 服务，提供交易员胜率、盈亏和持仓数据的筛选与排序页面。",
+    )
+    serve_web.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="监听地址，默认 127.0.0.1。",
+    )
+    serve_web.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="监听端口，默认 8000。",
+    )
+    serve_web.add_argument(
+        "--reload",
+        action="store_true",
+        help="开启 uvicorn 自动重载，适合本地开发。",
+    )
+    serve_web.set_defaults(handler=serve_web_command)
 
     return parser
 

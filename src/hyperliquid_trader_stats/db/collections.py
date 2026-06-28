@@ -107,6 +107,26 @@ async def init_hyper_x_collections(include_large_indexes: bool = False):
     )
     await _ensure_index(
         web3_hyperliquid_hyper_x_completed_trades_collection,
+        [("win_rate_score", DESCENDING), ("ethAddress", ASCENDING)],
+        name="win_rate_score_desc_eth_address",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_completed_trades_collection,
+        [("completed_trade_pnl.net", DESCENDING), ("ethAddress", ASCENDING)],
+        name="net_pnl_desc_eth_address",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_completed_trades_collection,
+        [
+            ("total_trades", ASCENDING),
+            ("win_rate_score", DESCENDING),
+            ("win_rate", DESCENDING),
+            ("ethAddress", ASCENDING),
+        ],
+        name="total_trades_rank_fields",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_completed_trades_collection,
         [
             ("entry_value_summary.win_rate_over_1w.win_rate", DESCENDING),
             ("ethAddress", ASCENDING),

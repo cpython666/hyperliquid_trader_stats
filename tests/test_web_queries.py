@@ -1,0 +1,259 @@
+import asyncio
+
+from hyperliquid_trader_stats.web import queries
+from hyperliquid_trader_stats.web.queries import build_trader_pipeline
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self.rows = rows
+        self.sort_spec = None
+        self.skip_value = 0
+        self.limit_value = None
+        self.hint_value = None
+
+    def sort(self, sort_spec):
+        self.sort_spec = sort_spec
+        return self
+
+    def skip(self, value):
+        self.skip_value = value
+        return self
+
+    def limit(self, value):
+        self.limit_value = value
+        return self
+
+    def hint(self, value):
+        self.hint_value = value
+        return self
+
+    async def to_list(self, length):
+        end = self.skip_value + (self.limit_value or length)
+        return self.rows[self.skip_value:end]
+
+
+class _FakeCompletedCollection:
+    def __init__(self):
+        self.aggregate_called = False
+        self.count_hint = None
+        self.id_cursor = None
+
+    def find(self, match, projection):
+        if projection == {"_id": 0, "ethAddress": 1}:
+            self.id_cursor = _FakeCursor(
+                [{"ethAddress": "0x2"}, {"ethAddress": "0x1"}]
+            )
+            return self.id_cursor
+        return _FakeCursor(
+            [
+                {"ethAddress": "0x1", "win_rate": 80},
+                {"ethAddress": "0x2", "win_rate": 90},
+            ]
+        )
+
+    async def estimated_document_count(self):
+        return 2
+
+    async def count_documents(self, match, **options):
+        self.count_hint = options.get("hint")
+        return 2
+
+    def aggregate(self, pipeline):
+        self.aggregate_called = True
+        raise AssertionError("普通排序不应进入全量聚合管线")
+
+
+class _FakeAddressCollection:
+    name = "addresses"
+
+    def find(self, match, projection):
+        return _FakeCursor(
+            [
+                {
+                    "ethAddress": "0x1",
+                    "effective_position_value": 10,
+                    "marginSummary": {"accountValue": 20},
+                },
+                {
+                    "ethAddress": "0x2",
+                    "effective_position_value": 30,
+                    "marginSummary": {"accountValue": 40},
+                },
+            ]
+        )
+
+
+class _FakeDetailCollection:
+    def __init__(self, result):
+        self.result = result
+        self.last_match = None
+        self.last_projection = None
+
+    async def find_one(self, match, projection):
+        self.last_match = match
+        self.last_projection = projection
+        return self.result
+
+
+def test_build_trader_pipeline_applies_completed_and_joined_filters():
+    pipeline = build_trader_pipeline(
+        search="0xabc",
+        min_win_rate=60,
+        min_total_trades=20,
+        min_position_value=1000,
+        position_direction="long",
+        entry_value_tier="10w",
+        min_entry_win_rate=70,
+        sort_by="position_value",
+        sort_dir="asc",
+    )
+
+    assert pipeline[0] == {
+        "$match": {
+            "ethAddress": {"$regex": "0xabc", "$options": "i"},
+            "win_rate": {"$gte": 60},
+            "total_trades": {"$gte": 20},
+            "entry_value_summary.win_rate_over_10w.win_rate": {"$gte": 70},
+        }
+    }
+    assert {"$match": {"effective_position_value": {"$gt": 1000}}} in pipeline
+    assert pipeline[-2] == {
+        "$sort": {"effective_position_value": 1, "ethAddress": -1}
+    }
+
+
+def test_build_trader_pipeline_looks_up_only_paged_rows_by_default():
+    pipeline = build_trader_pipeline()
+    facet = pipeline[-1]["$facet"]["items"]
+
+    assert pipeline[0] == {"$sort": {"win_rate_score": -1, "ethAddress": 1}}
+    assert facet[0] == {"$skip": 0}
+    assert facet[1] == {"$limit": 20}
+    assert "$lookup" in facet[2]
+
+
+def test_build_trader_pipeline_paginates_and_caps_page_size():
+    pipeline = build_trader_pipeline(page=3, page_size=500)
+    facet = pipeline[-1]["$facet"]["items"]
+
+    assert {"$skip": 400} in facet
+    assert {"$limit": 200} in facet
+
+
+def test_list_traders_pages_by_address_before_fetching_rows(monkeypatch):
+    completed = _FakeCompletedCollection()
+    monkeypatch.setattr(
+        queries,
+        "web3_hyperliquid_hyper_x_completed_trades_collection",
+        completed,
+    )
+    monkeypatch.setattr(
+        queries,
+        "web3_hyperliquid_hyper_x_addresses_collection",
+        _FakeAddressCollection(),
+    )
+
+    result = asyncio.run(
+        queries.list_traders(
+            page=1,
+            page_size=50,
+            sort_by="win_rate",
+            sort_dir="desc",
+        )
+    )
+
+    assert completed.aggregate_called is False
+    assert completed.id_cursor.sort_spec == [
+        ("win_rate", -1),
+        ("ethAddress", 1),
+    ]
+    assert [item["ethAddress"] for item in result["items"]] == ["0x2", "0x1"]
+    assert result["items"][0]["account_value"] == 40
+    assert result["total"] == 2
+
+
+def test_total_trades_filter_uses_covered_rank_index(monkeypatch):
+    completed = _FakeCompletedCollection()
+    monkeypatch.setattr(
+        queries,
+        "web3_hyperliquid_hyper_x_completed_trades_collection",
+        completed,
+    )
+    monkeypatch.setattr(
+        queries,
+        "web3_hyperliquid_hyper_x_addresses_collection",
+        _FakeAddressCollection(),
+    )
+
+    asyncio.run(
+        queries.list_traders(
+            page=1,
+            page_size=50,
+            min_total_trades=20,
+            sort_by="win_rate_score",
+            sort_dir="desc",
+        )
+    )
+
+    assert completed.id_cursor.hint_value == queries.TOTAL_TRADES_RANK_INDEX
+    assert completed.count_hint == queries.TOTAL_TRADES_RANK_INDEX
+
+
+def test_trader_detail_excludes_completed_trade_array(monkeypatch):
+    completed = _FakeDetailCollection(
+        {
+            "ethAddress": "0x1",
+            "total_trades": 120,
+            "win_rate": 75,
+        }
+    )
+    address_state = _FakeDetailCollection(
+        {"ethAddress": "0x1", "withdrawable": "10"}
+    )
+    monkeypatch.setattr(
+        queries,
+        "web3_hyperliquid_hyper_x_completed_trades_collection",
+        completed,
+    )
+    monkeypatch.setattr(
+        queries,
+        "web3_hyperliquid_hyper_x_addresses_collection",
+        address_state,
+    )
+
+    result = asyncio.run(queries.get_trader_detail("0x1"))
+
+    assert completed.last_projection == {"_id": 0, "completed_trades": 0}
+    assert "completed_trades" not in result
+    assert result["address_state"]["withdrawable"] == "10"
+
+
+def test_trader_trades_are_loaded_with_mongodb_slice(monkeypatch):
+    completed = _FakeDetailCollection(
+        {
+            "ethAddress": "0x1",
+            "total_trades": 120,
+            "completed_trades": [{"coin": "BTC"}, {"coin": "ETH"}],
+        }
+    )
+    monkeypatch.setattr(
+        queries,
+        "web3_hyperliquid_hyper_x_completed_trades_collection",
+        completed,
+    )
+
+    result = asyncio.run(
+        queries.list_trader_trades("0x1", page=3, page_size=50)
+    )
+
+    assert completed.last_projection["completed_trades"] == {
+        "$slice": [100, 50]
+    }
+    assert result == {
+        "items": [{"coin": "BTC"}, {"coin": "ETH"}],
+        "page": 3,
+        "page_size": 50,
+        "total": 120,
+        "pages": 3,
+    }

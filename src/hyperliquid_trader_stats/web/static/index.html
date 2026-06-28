@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hyperliquid Trader Stats</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Hyperliquid Trader Stats</h1>
+        <p id="resultSummary">正在载入交易员数据</p>
+      </div>
+      <button id="refreshButton" class="icon-button" title="刷新数据">↻</button>
+    </header>
+
+    <main class="layout">
+      <aside class="filters" aria-label="筛选规则">
+        <label>
+          地址
+          <input id="search" type="search" placeholder="0x..." autocomplete="off" />
+        </label>
+
+        <div class="two-col">
+          <label>
+            最低胜率
+            <input id="min_win_rate" type="number" min="0" max="100" step="0.01" placeholder="50" />
+          </label>
+          <label>
+            最高胜率
+            <input id="max_win_rate" type="number" min="0" max="100" step="0.01" />
+          </label>
+        </div>
+
+        <div class="two-col">
+          <label>
+            最少交易
+            <input id="min_total_trades" type="number" min="0" step="1" placeholder="20" />
+          </label>
+          <label>
+            最多交易
+            <input id="max_total_trades" type="number" min="0" step="1" />
+          </label>
+        </div>
+
+        <div class="two-col">
+          <label>
+            最低净盈亏
+            <input id="min_net_pnl" type="number" step="100" />
+          </label>
+          <label>
+            最高净盈亏
+            <input id="max_net_pnl" type="number" step="100" />
+          </label>
+        </div>
+
+        <div class="two-col">
+          <label>
+            最小持仓价值
+            <input id="min_position_value" type="number" step="1000" />
+          </label>
+          <label>
+            最大持仓价值
+            <input id="max_position_value" type="number" step="1000" />
+          </label>
+        </div>
+
+        <label>
+          仓位方向
+          <select id="position_direction">
+            <option value="any">全部</option>
+            <option value="long">多头</option>
+            <option value="short">空头</option>
+            <option value="flat">空仓</option>
+            <option value="unknown">未知</option>
+          </select>
+        </label>
+
+        <div class="two-col">
+          <label>
+            入场价值层
+            <select id="entry_value_tier">
+              <option value="all">不筛选</option>
+              <option value="1w">≥ 1w</option>
+              <option value="10w">≥ 10w</option>
+              <option value="100w">≥ 100w</option>
+              <option value="1000w">≥ 1000w</option>
+            </select>
+          </label>
+          <label>
+            层内最低胜率
+            <input id="min_entry_win_rate" type="number" min="0" max="100" step="0.01" />
+          </label>
+        </div>
+
+        <div class="two-col">
+          <label>
+            更新起始
+            <input id="updated_after" type="date" />
+          </label>
+          <label>
+            更新截止
+            <input id="updated_before" type="date" />
+          </label>
+        </div>
+
+        <div class="two-col">
+          <label>
+            排序字段
+            <select id="sort_by">
+              <option value="win_rate_score">胜率评分</option>
+              <option value="win_rate">胜率</option>
+              <option value="wilson">Wilson 下界</option>
+              <option value="total_trades">交易数</option>
+              <option value="net_pnl">净盈亏</option>
+              <option value="position_value">持仓价值</option>
+              <option value="account_value">账户价值</option>
+              <option value="updated_at">统计更新时间</option>
+            </select>
+          </label>
+          <label>
+            排序方向
+            <select id="sort_dir">
+              <option value="desc">降序</option>
+              <option value="asc">升序</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="two-col">
+          <label>
+            每页
+            <select id="page_size">
+              <option selected>20</option>
+              <option>25</option>
+              <option>50</option>
+              <option>100</option>
+              <option>200</option>
+            </select>
+          </label>
+          <button id="resetButton" class="secondary-button">重置</button>
+        </div>
+      </aside>
+
+      <section class="results" aria-label="交易员列表">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>地址</th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="win_rate">
+                    胜率 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="win_rate_score">
+                    评分 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="total_trades">
+                    交易 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="net_pnl">
+                    净盈亏 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="position_value">
+                    持仓价值 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th>1w / 10w / 100w</th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="updated_at">
+                    更新时间 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="traderRows"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button id="prevPage" class="secondary-button">上一页</button>
+          <span id="pageLabel">第 1 页</span>
+          <button id="nextPage" class="secondary-button">下一页</button>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="detailDialog">
+      <div class="dialog-header">
+        <strong id="detailTitle">地址详情</strong>
+        <form method="dialog">
+          <button class="icon-button close" title="关闭" aria-label="关闭详情">×</button>
+        </form>
+      </div>
+      <div class="dialog-content">
+        <section class="detail-section">
+          <h2>汇总数据</h2>
+          <div id="detailContent" class="detail-table-wrap"></div>
+        </section>
+        <section class="detail-section">
+          <h2>交易明细</h2>
+          <div id="tradeContent" class="detail-table-wrap" hidden></div>
+          <div id="tradePager" class="trade-pager" hidden>
+            <button id="prevTradePage" class="secondary-button" type="button">上一页</button>
+            <span id="tradePageLabel">第 1 页</span>
+            <button id="nextTradePage" class="secondary-button" type="button">下一页</button>
+          </div>
+        </section>
+      </div>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
