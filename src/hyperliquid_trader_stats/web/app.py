@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from hyperliquid_trader_stats.web.queries import (
+    get_dashboard_summary,
     get_trader_detail,
     list_trader_trades,
     list_traders,
@@ -30,9 +31,19 @@ async def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/leaderboard", include_in_schema=False)
+async def leaderboard():
+    return FileResponse(STATIC_DIR / "leaderboard.html")
+
+
 @app.get("/api/health")
 async def health():
     return {"ok": True}
+
+
+@app.get("/api/dashboard")
+async def dashboard():
+    return await get_dashboard_summary()
 
 
 @app.get("/api/traders")
