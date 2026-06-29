@@ -101,7 +101,10 @@ async def fetch_user_states_command(args):
     """执行用户持仓状态采集命令。"""
     from hyperliquid_trader_stats.services.fetch_and_store_user_state import main
 
-    await main(incremental=args.incremental)
+    await main(
+        incremental=args.incremental,
+        updated_before=args.updated_before,
+    )
 
 
 async def fetch_user_fills_command(args):
@@ -243,13 +246,20 @@ def build_parser():
     states = subparsers.add_parser(
         "fetch-user-states",
         help="采集用户当前持仓状态。",
-        description="查询地址集合中缺少状态字段的用户，并更新保证金、可提现金额和有效仓位价值。",
+        description="按增量、全量或更新时间筛选地址，并更新保证金、可提现金额和有效仓位价值。",
     )
-    states.add_argument(
+    states_mode = states.add_mutually_exclusive_group()
+    states_mode.add_argument(
         "--incremental",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="是否增量采集；使用 --no-incremental 可关闭。",
+        help="仅采集缺少状态的地址（默认）；使用 --no-incremental 可全量刷新。",
+    )
+    states_mode.add_argument(
+        "--updated-before",
+        type=utc_date,
+        metavar="YYYY-MM-DD",
+        help="采集在指定 UTC 日期之前更新或从未更新的地址。",
     )
     states.set_defaults(handler=fetch_user_states_command)
 
