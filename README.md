@@ -75,6 +75,7 @@ pip install -e .
 | `hyper-stats fetch-user-fills --limit 100000 --no-incremental` | 全量获取用户历史成交                   |
 | `hyper-stats compute-trades`                                   | 计算已完成订单与胜率摘要                 |
 | `hyper-stats analyze-ls-rate --visualize-result`               | 统计胜率与多空分布并可视化                |
+| `hyper-stats analyze-history`                                  | 绘制已存储分析结果的历史趋势图             |
 | `hyper-stats serve-web`                                        | 启动交易员数据筛选 Web 页面              |
 | `hyper-stats run-scheduler`                                    | 执行当前 fetch/analyze 调度流程      |
 
@@ -168,6 +169,18 @@ hyper-stats fetch-block-addresses 651879309
 
 默认向前扫描 1000 个区块，可通过 `--block-count` 调整。
 
+默认使用 aiohttp 后端，并发数为 5：
+
+```bash
+hyper-stats fetch-block-addresses 651879309 --block-count 1000
+```
+
+如果 aiohttp 方式遇到网络兼容问题，可以切到 requests 后端；requests 后端默认并发数为 10，也可以手动调小：
+
+```bash
+hyper-stats fetch-block-addresses 651879309 --requests --concurrency 3
+```
+
 参数说明：
 
 | 参数 | 作用 |
@@ -175,6 +188,7 @@ hyper-stats fetch-block-addresses 651879309
 | `start_height` | 可选的起始区块高度，例如 `651879309`；省略时自动获取最新区块高度。 |
 | `--block-count 1000` | 从起始高度向前扫描的区块数量，默认 1000。 |
 | `--requests` | 改用 requests 后端采集区块，可在默认 aiohttp 方式异常时备用。 |
+| `--concurrency` | 并发请求数量；默认 aiohttp 为 5，requests 为 10。 |
 
 ### 采集用户持仓状态
 
@@ -197,6 +211,47 @@ hyper-stats fetch-user-states --updated-before 2026-06-01
 | `--incremental` | 仅采集缺少状态的地址，默认启用。 |
 | `--no-incremental` | 全量刷新所有以 `0x` 开头的地址。 |
 | `--updated-before YYYY-MM-DD` | 刷新在指定 UTC 日期之前更新或从未更新的地址。 |
+
+### 绘制历史分析趋势图
+
+默认读取 `web3_hyperliquid_hyper_x_analyze_result` 中已存储的分析结果，按类型分别绘制多空人数比和多空价值比趋势图：
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats analyze-history
+```
+
+基础模式会绘制总胜率分布的两张折线图，并导出 `analyze_result.xlsx`：
+
+```bash
+hyper-stats analyze-history --basic
+```
+
+增强模式支持将所有类型合并为两张大图，并可保存 PNG：
+
+```bash
+hyper-stats analyze-history --mode big --output-dir plots_tmp --no-show
+```
+
+图片产出说明：
+
+| 命令 | 产出 |
+| ---- | ---- |
+| `hyper-stats analyze-history` | 打开 Matplotlib 窗口；默认不保存 PNG。增强 `group` 模式会按 `total`、`win_rate_over_1w`、`win_rate_over_10w`、`win_rate_over_100w`、`win_rate_over_1000w` 分别生成一组“人数比/价值比”窗口。 |
+| `hyper-stats analyze-history --output-dir plots_tmp --no-show` | 不打开窗口，保存 `plots_tmp/history_total_*.png`、`history_win_rate_over_1w_*.png`、`history_win_rate_over_10w_*.png`、`history_win_rate_over_100w_*.png`、`history_win_rate_over_1000w_*.png`。 |
+| `hyper-stats analyze-history --mode big --output-dir plots_tmp --no-show` | 保存两张总览图：`history_ratio_big_*.png` 和 `history_value_ratio_big_*.png`，分别对应多空人数比和多空价值比。 |
+| `hyper-stats analyze-history --basic` | 打开基础历史趋势窗口，并导出 `analyze_result.xlsx`。 |
+| `hyper-stats analyze-history --basic --output-dir plots --no-show` | 保存 `plots/history_basic_*.png`，并导出 `analyze_result.xlsx`。 |
+
+参数说明：
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `--basic` | 使用基础历史图，只绘制总胜率分布并导出 Excel。 |
+| `--mode group\|big` | 增强历史图模式；`group` 按类型分别绘图，`big` 合并为两张大图。 |
+| `--export-excel analyze_result.xlsx` | 基础模式导出的 Excel 路径；传空字符串可关闭导出。 |
+| `--output-dir` | 可选的 PNG 保存目录；不传则只显示窗口。 |
+| `--no-show` | 不显示 Matplotlib 窗口，适合服务器上只保存文件。 |
 
 ### 采集用户历史成交
 
@@ -286,13 +341,35 @@ cd /Users/cpython666/git_pro/hyperliquid-trader-stats
 hyper-stats analyze-ls-rate --visualize-result
 ```
 
+常用运行方式：
+
+```bash
+# 默认进阶分析：按入场价值区间细分，保存一张总览图到 plots_tmp
+hyper-stats analyze-ls-rate --visualize-result
+
+# 只导出图片，不把本次分析快照写入 MongoDB
+hyper-stats analyze-ls-rate --no-store-result --visualize-result
+
+# 基础分析：不按入场价值区间细分，保存多张单项图到 plots
+hyper-stats analyze-ls-rate --basic --no-store-result --visualize-result
+```
+
+图片产出说明：
+
+| 命令 | 产出 |
+| ---- | ---- |
+| `hyper-stats analyze-ls-rate --visualize-result` | 使用进阶分析器，保存 `plots_tmp/all_in_one_*.png`，包含胜率分布、多空仓位数量分布、多空数量比值、多空价值比值四个子图。默认还会把分析结果写入 MongoDB。 |
+| `hyper-stats analyze-ls-rate --no-store-result --visualize-result` | 同样保存 `plots_tmp/all_in_one_*.png`，但不写入 MongoDB，适合只想快速导图。 |
+| `hyper-stats analyze-ls-rate --basic --visualize-result` | 使用基础分析器，保存多张图片到 `plots/`：`pie_address_*.png`、`bar_winrate_*.png`、`bar_position_counts_*.png`、`line_ratio_*.png`、`line_value_ratio_*.png`、`bar_value_sums_*.png`。 |
+| `hyper-stats analyze-ls-rate --basic --no-store-result --visualize-result` | 同基础分析导图，但不把分析快照写入 MongoDB。 |
+
 参数说明：
 
 | 参数 | 作用 |
 | ---- | ---- |
 | `--visualize-result` | 生成分析结果图表；默认不生成。 |
 | `--store-result` / `--no-store-result` | 是否将分析结果写入 MongoDB，默认写入。 |
-| `--basic` | 使用不按入场价值区间细分的基础分析器；默认使用进阶分析器。 |
+| `--basic` | 使用不按入场价值区间细分的基础分析器；默认使用进阶分析器。基础分析器输出多张单项 PNG，进阶分析器输出一张合并 PNG。 |
 
 ### 启动 Web 数据筛选页面
 
@@ -355,12 +432,12 @@ PYTHONPATH=src python -m hyperliquid_trader_stats.cli --help
 | 脚本                          | 作用                         | 完成 |
 | ----------------------------- | ---------------------------- | ---- |
 | `services/add_addresses_from_vaults.py` | 采集金库的存款用户地址入库 | ✅ |
+| `services/fetch_block_addresses.py` | 从区块采集账户地址入库 | ✅ |
 | `services/fetch_and_store_user_state.py` | 采集用户持仓信息 | ✅ |
 | `services/fetch_and_store_user_fills.py` | 获取用户历史成交 | ✅ |
 | `plotting/analyze_ls_rate.py` | 统计胜率与多空分布并可视化 | ✅ |
 | `plotting/analyze_ls_rate_over_value_pro.py` | 按入场价值区间细分胜率与多空分布 | ✅ |
-| `plotting/analyze_analyze_result.py` | 按时间可视化已存储结果（2图） | ✅ |
-| `plotting/analyze_analyze_result_pro.py` | 按类型/汇总可视化已存储结果 | ✅ |
+| `plotting/analyze_history.py` | 按时间可视化已存储分析结果 | ✅ |
 | `services/run_fetch_states_and_analyze.py` | 定时执行当前采集/分析流程 | ✅ |
 
 ### 分析脚本说明
@@ -372,14 +449,10 @@ PYTHONPATH=src python -m hyperliquid_trader_stats.cli --help
   - 在上述基础上，按入场价值区间（`entry_value_summary` 的 `win_rate_over_1w/10w/100w/1000w`）进一步细分统计。
   - 额外输出 `value_position_distribution`，同样包含数量、价值总和与比值。
   - 可视化采用合并大图（2x2）保存到 `plots_tmp`，更适合总览对比。
-- `analyze_analyze_result.py`
-  - 读取已存储的分析结果集合，按时间绘制两张折线图：人数比 `ratio` 与价值比 `value_ratio`。
-  - 支持导出 Excel（`analyze_result.xlsx`），便于二次分析与分享。
-- `analyze_analyze_result_pro.py`
-  - 读取已存储结果，支持两种模式：
-    - `group`：按 `type`（如 `total`、`win_rate_over_1w/10w/100w/1000w`）逐组输出两图。
-    - `big`：将所有 `type` 合并到两张大图（人数比与价值比，各 2x3 子图）。
-  - 适合对 `position_distribution` 与 `value_position_distribution` 做更细致的时间序列对比。
+- `analyze_history.py`
+  - 读取已存储的分析结果集合，按时间绘制人数比 `ratio` 与价值比 `value_ratio`。
+  - `--basic` 可输出基础两图并导出 Excel（`analyze_result.xlsx`）。
+  - 增强模式支持 `group` 与 `big`：适合对 `position_distribution` 与 `value_position_distribution` 做更细致的时间序列对比。
 
 ## 需采集数据
 - 地址历史操作数据，fills

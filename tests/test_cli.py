@@ -127,6 +127,7 @@ def test_cli_exposes_expected_commands():
         "fetch-user-fills",
         "compute-trades",
         "analyze-ls-rate",
+        "analyze-history",
     }.issubset(subparser_action.choices)
 
 
@@ -147,6 +148,41 @@ def test_cli_accepts_fetch_block_addresses_start_height():
     assert args.start_height == 651879309
 
 
+def test_cli_parses_fetch_block_addresses_requests_backend():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        ["fetch-block-addresses", "651879309", "--requests", "--concurrency", "3"]
+    )
+
+    assert args.requests is True
+    assert args.concurrency == 3
+
+
+def test_cli_parses_analyze_history_defaults():
+    parser = build_parser()
+
+    args = parser.parse_args(["analyze-history"])
+
+    assert args.basic is False
+    assert args.mode == "group"
+    assert args.export_excel == "analyze_result.xlsx"
+    assert args.output_dir is None
+    assert args.show is True
+
+
+def test_cli_parses_analyze_history_big_no_show():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        ["analyze-history", "--mode", "big", "--output-dir", "plots_tmp", "--no-show"]
+    )
+
+    assert args.mode == "big"
+    assert args.output_dir == "plots_tmp"
+    assert args.show is False
+
+
 def test_fetch_block_addresses_uses_latest_height_when_omitted(monkeypatch):
     fetch = AsyncMock()
     get_height = Mock(return_value=651879309)
@@ -156,12 +192,44 @@ def test_fetch_block_addresses_uses_latest_height_when_omitted(monkeypatch):
     )
     monkeypatch.setitem(
         sys.modules,
-        "hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block",
+        "hyperliquid_trader_stats.services.fetch_block_addresses",
         module,
     )
-    args = SimpleNamespace(requests=False, start_height=None, block_count=1000)
+    args = SimpleNamespace(
+        requests=False, start_height=None, block_count=1000, concurrency=None
+    )
 
     asyncio.run(fetch_block_addresses_command(args))
 
     get_height.assert_called_once_with()
-    fetch.assert_awaited_once_with(651879309, 1000)
+    fetch.assert_awaited_once_with(
+        651879309,
+        1000,
+        backend="aiohttp",
+        concurrency=None,
+    )
+
+
+def test_fetch_block_addresses_passes_requests_backend(monkeypatch):
+    fetch = AsyncMock()
+    module = SimpleNamespace(
+        fetch_and_store_addresses_from_block=fetch,
+        get_block_height=Mock(),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hyperliquid_trader_stats.services.fetch_block_addresses",
+        module,
+    )
+    args = SimpleNamespace(
+        requests=True, start_height=651879309, block_count=500, concurrency=7
+    )
+
+    asyncio.run(fetch_block_addresses_command(args))
+
+    fetch.assert_awaited_once_with(
+        651879309,
+        500,
+        backend="requests",
+        concurrency=7,
+    )

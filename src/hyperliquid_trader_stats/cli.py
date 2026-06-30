@@ -74,18 +74,10 @@ async def fetch_hyperdash_top_traders_command(_args):
 
 async def fetch_block_addresses_command(args):
     """从指定区块或最新区块开始采集链上交易地址。"""
-    if args.requests:
-        from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block_requests import (
-            fetch_and_store_addresses_from_block,
-        )
-        from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block import (
-            get_block_height,
-        )
-    else:
-        from hyperliquid_trader_stats.services.fetch_and_store_addresses_from_block import (
-            fetch_and_store_addresses_from_block,
-            get_block_height,
-        )
+    from hyperliquid_trader_stats.services.fetch_block_addresses import (
+        fetch_and_store_addresses_from_block,
+        get_block_height,
+    )
 
     start_height = args.start_height
     if start_height is None:
@@ -94,7 +86,12 @@ async def fetch_block_addresses_command(args):
             raise RuntimeError("获取最新区块高度失败，请稍后重试或手动传入起始区块高度。")
         logging.info("未指定起始区块高度，使用最新区块高度：%s", start_height)
 
-    await fetch_and_store_addresses_from_block(start_height, args.block_count)
+    await fetch_and_store_addresses_from_block(
+        start_height,
+        args.block_count,
+        backend="requests" if args.requests else "aiohttp",
+        concurrency=args.concurrency,
+    )
 
 
 async def fetch_user_states_command(args):
@@ -141,6 +138,19 @@ async def analyze_ls_rate_command(args):
     await analyze_ls_rate(
         store_result=args.store_result,
         visualize_result=args.visualize_result,
+    )
+
+
+async def analyze_history_command(args):
+    """执行历史分析结果趋势图命令。"""
+    from hyperliquid_trader_stats.plotting.analyze_history import visualize_history
+
+    await visualize_history(
+        basic=args.basic,
+        mode=args.mode,
+        export_excel=args.export_excel or None,
+        output_dir=args.output_dir,
+        show=args.show,
     )
 
 
@@ -241,6 +251,12 @@ def build_parser():
         action="store_true",
         help="使用 requests 后端采集区块，适合 aiohttp 方式异常时备用。",
     )
+    block_addresses.add_argument(
+        "--concurrency",
+        type=positive_int,
+        default=None,
+        help="并发请求数量；默认 aiohttp 为 5，requests 为 10。",
+    )
     block_addresses.set_defaults(handler=fetch_block_addresses_command)
 
     states = subparsers.add_parser(
@@ -330,6 +346,40 @@ def build_parser():
         help="是否生成可视化图表；默认不生成，传入 --visualize-result 开启。",
     )
     analyze.set_defaults(handler=analyze_ls_rate_command)
+
+    history = subparsers.add_parser(
+        "analyze-history",
+        help="绘制历史分析结果趋势图。",
+        description="读取已保存的分析结果，绘制多空人数比和多空价值比随时间变化的折线图。",
+    )
+    history.add_argument(
+        "--basic",
+        action="store_true",
+        help="使用基础历史图，只绘制总胜率分布并导出 Excel。",
+    )
+    history.add_argument(
+        "--mode",
+        choices=["group", "big"],
+        default="group",
+        help="增强历史图模式：group 按类型分别绘图，big 合并为两张大图；默认 group。",
+    )
+    history.add_argument(
+        "--export-excel",
+        default="analyze_result.xlsx",
+        help="基础模式导出的 Excel 路径；传空字符串可关闭导出。",
+    )
+    history.add_argument(
+        "--output-dir",
+        default=None,
+        help="可选的 PNG 保存目录；不传则只显示窗口。",
+    )
+    history.add_argument(
+        "--show",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="是否显示 Matplotlib 窗口；使用 --no-show 可只保存文件。",
+    )
+    history.set_defaults(handler=analyze_history_command)
 
     update_high_winrate = subparsers.add_parser(
         "update-high-winrate-positions",
