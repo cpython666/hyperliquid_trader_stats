@@ -3,9 +3,9 @@ import logging
 import os
 from datetime import datetime
 from pprint import pprint
+from time import perf_counter
 import matplotlib.pyplot as plt
 import seaborn as sns
-from motor.motor_asyncio import AsyncIOMotorCollection
 from hyperliquid_trader_stats.db.collections import (
     web3_hyperliquid_hyper_x_addresses_collection,
     web3_hyperliquid_hyper_x_completed_trades_collection,
@@ -23,6 +23,77 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(), logging.FileHandler("app.log")],
 )
 logger = logging.getLogger(__name__)
+
+VALUE_KEYS = [
+    "win_rate_over_1w",
+    "win_rate_over_10w",
+    "win_rate_over_100w",
+    "win_rate_over_1000w",
+]
+WINRATE_THRESHOLDS = [50, 60, 70, 80, 90]
+VALUE_WINRATE_THRESHOLDS = [50, 60, 70, 80, 90, 100]
+POSITION_KEYS = ["ge_50", "ge_60", "ge_70", "ge_80", "ge_90", "eq_100"]
+
+
+def _empty_distribution(keys):
+    return {
+        key: {
+            **_empty_position_item(),
+        }
+        for key in keys
+    }
+
+
+def _empty_position_item():
+    return {
+        "long": 0,
+        "short": 0,
+        "long_value_sum": 0.0,
+        "short_value_sum": 0.0,
+        "ratio": None,
+        "value_ratio": None,
+    }
+
+
+def _add_position_item(item: dict, pos_value: float):
+    if pos_value > 0:
+        item["long"] += 1
+        item["long_value_sum"] += pos_value
+    elif pos_value < 0:
+        item["short"] += 1
+        item["short_value_sum"] += pos_value
+
+
+def _add_position(distribution: dict, key: str, pos_value: float):
+    _add_position_item(distribution[key], pos_value)
+
+
+def _finalize_distribution(distribution: dict):
+    for item in distribution.values():
+        long_count = item["long"]
+        short_count = item["short"]
+        long_value = item["long_value_sum"]
+        short_value = item["short_value_sum"]
+        item["ratio"] = round(long_count / short_count, 2) if short_count > 0 else None
+        item["value_ratio"] = (
+            round(long_value / abs(short_value), 2) if abs(short_value) > 0 else None
+        )
+        item["long_value_sum"] = round(long_value, 3)
+        item["short_value_sum"] = round(short_value, 3)
+
+
+async def _estimated_count(collection, label: str) -> int:
+    try:
+        return await collection.estimated_document_count()
+    except Exception as error:
+        logger.warning("%s 快速计数失败，回退到精确计数: %s", label, error)
+        return await collection.count_documents({})
+
+
+def _log_elapsed(started_at: float, label: str) -> float:
+    now = perf_counter()
+    logger.info("%s耗时: %.2f 秒", label, now - started_at)
+    return now
 
 
 async def analyze_winrate_and_positions():
@@ -50,244 +121,114 @@ async def analyze_winrate_and_positions():
         如果发生异常（如数据库连接失败），记录错误日志并返回空字典 {}。
     """
     try:
-        # 统计总地址数
-        total_addresses = (
-            await web3_hyperliquid_hyper_x_addresses_collection.count_documents({})
-        )
-        logger.info(f"总地址数: {total_addresses}")
+        started_at = perf_counter()
+        step_started_at = started_at
 
-        # 统计已分析交易的地址数
-        analyzed_addresses = (
-            await web3_hyperliquid_hyper_x_completed_trades_collection.count_documents(
-                {}
+        total_addresses, estimated_analyzed_addresses = await asyncio.gather(
+            _estimated_count(web3_hyperliquid_hyper_x_addresses_collection, "总地址数"),
+            _estimated_count(
+                web3_hyperliquid_hyper_x_completed_trades_collection,
+                "已分析交易地址数",
             )
         )
-        logger.info(f"已分析交易的地址数: {analyzed_addresses}")
+        logger.info(f"总地址数: {total_addresses}")
+        logger.info(f"已分析交易的地址数（估算）: {estimated_analyzed_addresses}")
+        step_started_at = _log_elapsed(step_started_at, "地址计数")
 
-        # 获取胜率数据
-        trades_cursor = web3_hyperliquid_hyper_x_completed_trades_collection.find(
-            {"win_rate": {"$exists": True, "$ne": None}},
-            {"ethAddress": 1, "win_rate": 1},
-        )
-        trades_data = {
-            doc["ethAddress"]: doc["win_rate"] async for doc in trades_cursor
-        }
-        logger.info(f"获取到 {len(trades_data)} 个地址的胜率数据")
-
-        # 获取仓位数据
         addresses_cursor = web3_hyperliquid_hyper_x_addresses_collection.find(
             {"effective_position_value": {"$exists": True, "$ne": None}},
             {"ethAddress": 1, "effective_position_value": 1},
-        )
-        addresses_data = {
-            doc["ethAddress"]: doc["effective_position_value"]
-            async for doc in addresses_cursor
-        }
+        ).batch_size(5000)
+        addresses_data = {}
+        async for doc in addresses_cursor:
+            addresses_data[doc["ethAddress"]] = doc["effective_position_value"]
+            if len(addresses_data) % 10000 == 0:
+                logger.info("已读取 %s 个地址的仓位数据", len(addresses_data))
         logger.info(f"获取到 {len(addresses_data)} 个地址的仓位数据")
+        step_started_at = _log_elapsed(step_started_at, "读取仓位数据")
 
-        # 胜率分布（>= 50%、>= 60%、>= 70%、>= 80%、>= 90%）
-        winrate_distribution = {
-            "ge_50": sum(1 for win_rate in trades_data.values() if win_rate >= 50),
-            "ge_60": sum(1 for win_rate in trades_data.values() if win_rate >= 60),
-            "ge_70": sum(1 for win_rate in trades_data.values() if win_rate >= 70),
-            "ge_80": sum(1 for win_rate in trades_data.values() if win_rate >= 80),
-            "ge_90": sum(1 for win_rate in trades_data.values() if win_rate >= 90),
-        }
-        logger.info(f"胜率分布: {winrate_distribution}")
-
-        # 多空分布，包含数量、价值总和及比值
-        position_distribution = {
-            "ge_50": {
-                "long": 0,
-                "short": 0,
-                "long_value_sum": 0.0,
-                "short_value_sum": 0.0,
-                "ratio": None,
-                "value_ratio": None,
-            },
-            "ge_60": {
-                "long": 0,
-                "short": 0,
-                "long_value_sum": 0.0,
-                "short_value_sum": 0.0,
-                "ratio": None,
-                "value_ratio": None,
-            },
-            "ge_70": {
-                "long": 0,
-                "short": 0,
-                "long_value_sum": 0.0,
-                "short_value_sum": 0.0,
-                "ratio": None,
-                "value_ratio": None,
-            },
-            "ge_80": {
-                "long": 0,
-                "short": 0,
-                "long_value_sum": 0.0,
-                "short_value_sum": 0.0,
-                "ratio": None,
-                "value_ratio": None,
-            },
-            "ge_90": {
-                "long": 0,
-                "short": 0,
-                "long_value_sum": 0.0,
-                "short_value_sum": 0.0,
-                "ratio": None,
-                "value_ratio": None,
-            },
-            "eq_100": {
-                "long": 0,
-                "short": 0,
-                "long_value_sum": 0.0,
-                "short_value_sum": 0.0,
-                "ratio": None,
-                "value_ratio": None,
-            },
-        }
-
-        for addr, win_rate in trades_data.items():
-            if addr not in addresses_data:
-                continue
-            pos_value = addresses_data[addr]
-            if win_rate >= 50:
-                if pos_value > 0:
-                    position_distribution["ge_50"]["long"] += 1
-                    position_distribution["ge_50"]["long_value_sum"] += pos_value
-                elif pos_value < 0:
-                    position_distribution["ge_50"]["short"] += 1
-                    position_distribution["ge_50"]["short_value_sum"] += pos_value
-            if win_rate >= 60:
-                if pos_value > 0:
-                    position_distribution["ge_60"]["long"] += 1
-                    position_distribution["ge_60"]["long_value_sum"] += pos_value
-                elif pos_value < 0:
-                    position_distribution["ge_60"]["short"] += 1
-                    position_distribution["ge_60"]["short_value_sum"] += pos_value
-            if win_rate >= 70:
-                if pos_value > 0:
-                    position_distribution["ge_70"]["long"] += 1
-                    position_distribution["ge_70"]["long_value_sum"] += pos_value
-                elif pos_value < 0:
-                    position_distribution["ge_70"]["short"] += 1
-                    position_distribution["ge_70"]["short_value_sum"] += pos_value
-            if win_rate >= 80:
-                if pos_value > 0:
-                    position_distribution["ge_80"]["long"] += 1
-                    position_distribution["ge_80"]["long_value_sum"] += pos_value
-                elif pos_value < 0:
-                    position_distribution["ge_80"]["short"] += 1
-                    position_distribution["ge_80"]["short_value_sum"] += pos_value
-            if win_rate >= 90:
-                if pos_value > 0:
-                    position_distribution["ge_90"]["long"] += 1
-                    position_distribution["ge_90"]["long_value_sum"] += pos_value
-                elif pos_value < 0:
-                    position_distribution["ge_90"]["short"] += 1
-                    position_distribution["ge_90"]["short_value_sum"] += pos_value
-            if win_rate == 100:
-                if pos_value > 0:
-                    position_distribution["eq_100"]["long"] += 1
-                    position_distribution["eq_100"]["long_value_sum"] += pos_value
-                elif pos_value < 0:
-                    position_distribution["eq_100"]["short"] += 1
-                    position_distribution["eq_100"]["short_value_sum"] += pos_value
-
-        # 计算多空地址数量比值和多空仓位价值总和比值，保留两位小数
-        for key in position_distribution:
-            long = position_distribution[key]["long"]
-            short = position_distribution[key]["short"]
-            long_value = position_distribution[key]["long_value_sum"]
-            short_value = position_distribution[key]["short_value_sum"]
-            position_distribution[key]["ratio"] = (
-                round(long / short, 2) if short > 0 else None
-            )
-            position_distribution[key]["value_ratio"] = (
-                round(long_value / abs(short_value), 2)
-                if abs(short_value) > 0
-                else None
-            )
-            # 确保价值总和保留三位小数
-            position_distribution[key]["long_value_sum"] = round(
-                position_distribution[key]["long_value_sum"], 3
-            )
-            position_distribution[key]["short_value_sum"] = round(
-                position_distribution[key]["short_value_sum"], 3
-            )
-
-        logger.info(f"多空分布: {position_distribution}")
-
-        # 获取 entry_value_summary 数据
-        trades_cursor = web3_hyperliquid_hyper_x_completed_trades_collection.find(
-            {"entry_value_summary": {"$exists": True, "$ne": None}},
-            {"ethAddress": 1, "entry_value_summary": 1},
-        )
-        entry_value_data = {
-            doc["ethAddress"]: doc["entry_value_summary"] async for doc in trades_cursor
-        }
-        logger.info(f"获取到 {len(entry_value_data)} 个地址的 entry_value_summary 数据")
-
-        # 需要统计的区间key
-        value_keys = [
-            "win_rate_over_1w",
-            "win_rate_over_10w",
-            "win_rate_over_100w",
-            "win_rate_over_1000w",
-        ]
-        # 需要统计的胜率阈值
-        winrate_thresholds = [50, 60, 70, 80, 90, 100]
-
-        # 初始化结构
+        winrate_distribution = {f"ge_{thresh}": 0 for thresh in WINRATE_THRESHOLDS}
+        position_distribution = _empty_distribution(POSITION_KEYS)
         value_position_distribution = {
             key: {
-                f"ge_{thresh}": {
-                    "long": 0,
-                    "short": 0,
-                    "long_value_sum": 0.0,
-                    "short_value_sum": 0.0,
-                    "ratio": None,
-                    "value_ratio": None,
-                }
-                for thresh in winrate_thresholds
+                f"ge_{thresh}": _empty_position_item()
+                for thresh in VALUE_WINRATE_THRESHOLDS
             }
-            for key in value_keys
+            for key in VALUE_KEYS
         }
+        projection = {"ethAddress": 1, "win_rate": 1}
+        for key in VALUE_KEYS:
+            projection[f"entry_value_summary.{key}.win_rate"] = 1
 
-        # 统计每个区间、每个胜率阈值的多空分布
-        for addr, entry_summary in entry_value_data.items():
+        trades_cursor = web3_hyperliquid_hyper_x_completed_trades_collection.find(
+            {
+                "$or": [
+                    {"win_rate": {"$exists": True, "$ne": None}},
+                    {"entry_value_summary": {"$exists": True, "$ne": None}},
+                ]
+            },
+            projection,
+        ).batch_size(5000)
+
+        winrate_data_count = 0
+        entry_value_data_count = 0
+
+        async for doc in trades_cursor:
+            addr = doc.get("ethAddress")
             pos_value = addresses_data.get(addr)
+
+            win_rate = doc.get("win_rate")
+            if win_rate is not None:
+                winrate_data_count += 1
+                for thresh in WINRATE_THRESHOLDS:
+                    if win_rate >= thresh:
+                        winrate_distribution[f"ge_{thresh}"] += 1
+
+                if pos_value is not None:
+                    for thresh in WINRATE_THRESHOLDS:
+                        if win_rate >= thresh:
+                            _add_position(
+                                position_distribution, f"ge_{thresh}", pos_value
+                            )
+                    if win_rate == 100:
+                        _add_position(position_distribution, "eq_100", pos_value)
+
+            entry_summary = doc.get("entry_value_summary")
+            if not entry_summary:
+                continue
+
+            entry_value_data_count += 1
+            if entry_value_data_count % 10000 == 0:
+                logger.info(
+                    "已统计 %s 个交易地址，包含 %s 个 entry_value_summary",
+                    winrate_data_count,
+                    entry_value_data_count,
+                )
             if pos_value is None:
                 continue
-            for key in value_keys:
+
+            for key in VALUE_KEYS:
                 win_rate = entry_summary.get(key, {}).get("win_rate", 0)
-                for thresh in winrate_thresholds:
+                for thresh in VALUE_WINRATE_THRESHOLDS:
                     if win_rate >= thresh:
-                        d = value_position_distribution[key][f"ge_{thresh}"]
-                        if pos_value > 0:
-                            d["long"] += 1
-                            d["long_value_sum"] += pos_value
-                        elif pos_value < 0:
-                            d["short"] += 1
-                            d["short_value_sum"] += pos_value
+                        _add_position_item(
+                            value_position_distribution[key][f"ge_{thresh}"], pos_value
+                        )
 
-        # 计算比值
+        logger.info(f"获取并统计 {winrate_data_count} 个地址的胜率数据")
+        logger.info(
+            f"获取并统计 {entry_value_data_count} 个地址的 entry_value_summary 数据"
+        )
+        analyzed_addresses = winrate_data_count
+        logger.info(f"已分析交易的地址数（精确）: {analyzed_addresses}")
+        step_started_at = _log_elapsed(step_started_at, "读取并统计交易数据")
+
+        _finalize_distribution(position_distribution)
         for key in value_position_distribution:
-            for thresh in winrate_thresholds:
-                d = value_position_distribution[key][f"ge_{thresh}"]
-                long = d["long"]
-                short = d["short"]
-                long_value = d["long_value_sum"]
-                short_value = d["short_value_sum"]
-                d["ratio"] = round(long / short, 2) if short > 0 else None
-                d["value_ratio"] = (
-                    round(long_value / abs(short_value), 2)
-                    if abs(short_value) > 0
-                    else None
-                )
-                d["long_value_sum"] = round(long_value, 3)
-                d["short_value_sum"] = round(short_value, 3)
+            _finalize_distribution(value_position_distribution[key])
 
+        logger.info(f"胜率分布: {winrate_distribution}")
+        logger.info(f"多空分布: {position_distribution}")
         logger.info(
             f"各仓位价值区间各胜率阈值的多空分布: {value_position_distribution}"
         )
@@ -301,6 +242,7 @@ async def analyze_winrate_and_positions():
             "value_position_distribution": value_position_distribution,  # 新增
             "timestamp": datetime.utcnow(),  # 添加时间戳
         }
+        _log_elapsed(started_at, "分析总")
         return result
 
     except Exception as e:

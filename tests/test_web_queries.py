@@ -110,6 +110,15 @@ def test_build_trader_pipeline_applies_completed_and_joined_filters():
     )
 
     assert pipeline[0] == {
+        "$match": {"effective_position_value": {"$gt": 1000}}
+    }
+    assert pipeline[1] == {
+        "$sort": {"effective_position_value": 1, "ethAddress": -1}
+    }
+    item_pipeline = pipeline[-1]["$facet"]["items"]
+    lookup = next(stage["$lookup"] for stage in item_pipeline if "$lookup" in stage)
+    assert lookup["localField"] == "ethAddress"
+    assert lookup["pipeline"][0] == {
         "$match": {
             "ethAddress": {"$regex": "0xabc", "$options": "i"},
             "win_rate": {"$gte": 60},
@@ -117,9 +126,36 @@ def test_build_trader_pipeline_applies_completed_and_joined_filters():
             "entry_value_summary.win_rate_over_10w.win_rate": {"$gte": 70},
         }
     }
-    assert {"$match": {"effective_position_value": {"$gt": 1000}}} in pipeline
-    assert pipeline[-2] == {
-        "$sort": {"effective_position_value": 1, "ethAddress": -1}
+    assert "completed_trades" not in lookup["pipeline"][-1]["$project"]
+
+
+def test_full_address_search_uses_exact_index_lookup():
+    address = "0x" + ("a" * 40)
+
+    pipeline = build_trader_pipeline(search=address)
+
+    assert pipeline[0] == {"$match": {"ethAddress": address}}
+
+
+def test_joined_filter_preserves_completed_sort_index():
+    pipeline = build_trader_pipeline(
+        min_position_value=1000,
+        sort_by="win_rate_score",
+        sort_dir="desc",
+    )
+
+    assert pipeline[0] == {
+        "$sort": {"win_rate_score": -1, "ethAddress": 1}
+    }
+    assert pipeline[1] == {"$project": queries._trader_projection()}
+    item_pipeline = pipeline[-1]["$facet"]["items"]
+    lookup = next(stage["$lookup"] for stage in item_pipeline if "$lookup" in stage)
+    assert (
+        lookup["from"]
+        == queries.web3_hyperliquid_hyper_x_addresses_collection.name
+    )
+    assert lookup["pipeline"][0] == {
+        "$match": {"effective_position_value": {"$gte": 1000}}
     }
 
 

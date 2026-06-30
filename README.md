@@ -180,8 +180,23 @@ hyper-stats fetch-block-addresses 651879309
 
 ```bash
 cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+# 增量：仅采集缺少 marginSummary 的地址（默认）
 hyper-stats fetch-user-states
+
+# 全量：刷新所有有效地址
+hyper-stats fetch-user-states --no-incremental
+
+# 过期刷新：刷新该 UTC 日期之前更新或从未更新的地址
+hyper-stats fetch-user-states --updated-before 2026-06-01
 ```
+
+参数说明：
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `--incremental` | 仅采集缺少状态的地址，默认启用。 |
+| `--no-incremental` | 全量刷新所有以 `0x` 开头的地址。 |
+| `--updated-before YYYY-MM-DD` | 刷新在指定 UTC 日期之前更新或从未更新的地址。 |
 
 ### 采集用户历史成交
 

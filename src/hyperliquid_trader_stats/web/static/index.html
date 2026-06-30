@@ -3,220 +3,126 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hyperliquid Trader Stats</title>
+    <title>数据大屏 · HyperStats</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body>
-    <header class="topbar">
-      <div>
-        <h1>Hyperliquid Trader Stats</h1>
-        <p id="resultSummary">正在载入交易员数据</p>
+  <body class="dashboard-body">
+    <header class="app-header dashboard-header">
+      <a class="brand" href="/" aria-label="HyperStats 首页">
+        <span class="brand-mark">H</span>
+        <span>HyperStats</span>
+      </a>
+      <nav class="main-nav" aria-label="主导航">
+        <a class="active" href="/" aria-current="page">数据大屏</a>
+        <a href="/leaderboard">交易员排行</a>
+      </nav>
+      <div class="dashboard-status">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="dashboardStatus">数据加载中</span>
+        <button id="dashboardRefresh" class="icon-button dark" title="刷新数据">↻</button>
       </div>
-      <button id="refreshButton" class="icon-button" title="刷新数据">↻</button>
     </header>
 
-    <main class="layout">
-      <aside class="filters" aria-label="筛选规则">
-        <label>
-          地址
-          <input id="search" type="search" placeholder="0x..." autocomplete="off" />
-        </label>
-
-        <div class="two-col">
-          <label>
-            最低胜率
-            <input id="min_win_rate" type="number" min="0" max="100" step="0.01" placeholder="50" />
-          </label>
-          <label>
-            最高胜率
-            <input id="max_win_rate" type="number" min="0" max="100" step="0.01" />
-          </label>
+    <main class="dashboard">
+      <section class="dashboard-hero">
+        <div>
+          <p class="eyebrow">HYPERLIQUID TRADER INTELLIGENCE</p>
+          <h1>链上交易全景</h1>
+          <p class="hero-copy">从地址覆盖、历史表现到实时仓位，一屏掌握交易员生态。</p>
         </div>
-
-        <div class="two-col">
-          <label>
-            最少交易
-            <input id="min_total_trades" type="number" min="0" step="1" placeholder="20" />
-          </label>
-          <label>
-            最多交易
-            <input id="max_total_trades" type="number" min="0" step="1" />
-          </label>
-        </div>
-
-        <div class="two-col">
-          <label>
-            最低净盈亏
-            <input id="min_net_pnl" type="number" step="100" />
-          </label>
-          <label>
-            最高净盈亏
-            <input id="max_net_pnl" type="number" step="100" />
-          </label>
-        </div>
-
-        <div class="two-col">
-          <label>
-            最小持仓价值
-            <input id="min_position_value" type="number" step="1000" />
-          </label>
-          <label>
-            最大持仓价值
-            <input id="max_position_value" type="number" step="1000" />
-          </label>
-        </div>
-
-        <label>
-          仓位方向
-          <select id="position_direction">
-            <option value="any">全部</option>
-            <option value="long">多头</option>
-            <option value="short">空头</option>
-            <option value="flat">空仓</option>
-            <option value="unknown">未知</option>
-          </select>
-        </label>
-
-        <div class="two-col">
-          <label>
-            入场价值层
-            <select id="entry_value_tier">
-              <option value="all">不筛选</option>
-              <option value="1w">≥ 1w</option>
-              <option value="10w">≥ 10w</option>
-              <option value="100w">≥ 100w</option>
-              <option value="1000w">≥ 1000w</option>
-            </select>
-          </label>
-          <label>
-            层内最低胜率
-            <input id="min_entry_win_rate" type="number" min="0" max="100" step="0.01" />
-          </label>
-        </div>
-
-        <div class="two-col">
-          <label>
-            更新起始
-            <input id="updated_after" type="date" />
-          </label>
-          <label>
-            更新截止
-            <input id="updated_before" type="date" />
-          </label>
-        </div>
-
-        <div class="two-col">
-          <label>
-            排序字段
-            <select id="sort_by">
-              <option value="win_rate_score">胜率评分</option>
-              <option value="win_rate">胜率</option>
-              <option value="wilson">Wilson 下界</option>
-              <option value="total_trades">交易数</option>
-              <option value="net_pnl">净盈亏</option>
-              <option value="position_value">持仓价值</option>
-              <option value="account_value">账户价值</option>
-              <option value="updated_at">统计更新时间</option>
-            </select>
-          </label>
-          <label>
-            排序方向
-            <select id="sort_dir">
-              <option value="desc">降序</option>
-              <option value="asc">升序</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="two-col">
-          <label>
-            每页
-            <select id="page_size">
-              <option selected>20</option>
-              <option>25</option>
-              <option>50</option>
-              <option>100</option>
-              <option>200</option>
-            </select>
-          </label>
-          <button id="resetButton" class="secondary-button">重置</button>
-        </div>
-      </aside>
-
-      <section class="results" aria-label="交易员列表">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>地址</th>
-                <th aria-sort="none">
-                  <button class="sort-header" type="button" data-sort-by="win_rate">
-                    胜率 <span class="sort-indicator" aria-hidden="true">↕</span>
-                  </button>
-                </th>
-                <th aria-sort="none">
-                  <button class="sort-header" type="button" data-sort-by="win_rate_score">
-                    评分 <span class="sort-indicator" aria-hidden="true">↕</span>
-                  </button>
-                </th>
-                <th aria-sort="none">
-                  <button class="sort-header" type="button" data-sort-by="total_trades">
-                    交易 <span class="sort-indicator" aria-hidden="true">↕</span>
-                  </button>
-                </th>
-                <th aria-sort="none">
-                  <button class="sort-header" type="button" data-sort-by="net_pnl">
-                    净盈亏 <span class="sort-indicator" aria-hidden="true">↕</span>
-                  </button>
-                </th>
-                <th aria-sort="none">
-                  <button class="sort-header" type="button" data-sort-by="position_value">
-                    持仓价值 <span class="sort-indicator" aria-hidden="true">↕</span>
-                  </button>
-                </th>
-                <th>1w / 10w / 100w</th>
-                <th aria-sort="none">
-                  <button class="sort-header" type="button" data-sort-by="updated_at">
-                    更新时间 <span class="sort-indicator" aria-hidden="true">↕</span>
-                  </button>
-                </th>
-              </tr>
-            </thead>
-            <tbody id="traderRows"></tbody>
-          </table>
-        </div>
-        <div class="pager">
-          <button id="prevPage" class="secondary-button">上一页</button>
-          <span id="pageLabel">第 1 页</span>
-          <button id="nextPage" class="secondary-button">下一页</button>
+        <div class="hero-meta">
+          <span>最后分析时间</span>
+          <strong id="analysisUpdatedAt">—</strong>
         </div>
       </section>
+
+      <section class="metric-grid" aria-label="核心指标">
+        <article class="metric-card feature">
+          <span class="metric-label">追踪地址</span>
+          <strong id="trackedAddresses" class="metric-value">—</strong>
+          <span id="analysisCoverage" class="metric-foot">等待分析覆盖数据</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">已分析交易员</span>
+          <strong id="traderCount" class="metric-value">—</strong>
+          <span class="metric-foot">已生成完整交易统计</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">高胜率交易员</span>
+          <strong id="highWinRate" class="metric-value">—</strong>
+          <span class="metric-foot">历史胜率 ≥ 50%</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">精英交易员</span>
+          <strong id="eliteTraders" class="metric-value">—</strong>
+          <span id="eliteRate" class="metric-foot">历史胜率 ≥ 80%</span>
+        </article>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="dashboard-panel capital-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="panel-kicker">QUALITY</span>
+              <h2>胜率质量分布</h2>
+            </div>
+            <span class="panel-badge">累计阈值</span>
+          </div>
+          <div class="quality-bars">
+            <div><span>≥ 50%</span><i><b id="qualityBar50"></b></i><strong id="quality50">—</strong></div>
+            <div><span>≥ 60%</span><i><b id="qualityBar60"></b></i><strong id="quality60">—</strong></div>
+            <div><span>≥ 70%</span><i><b id="qualityBar70"></b></i><strong id="quality70">—</strong></div>
+            <div><span>≥ 80%</span><i><b id="qualityBar80"></b></i><strong id="quality80">—</strong></div>
+            <div><span>≥ 90%</span><i><b id="qualityBar90"></b></i><strong id="quality90">—</strong></div>
+          </div>
+        </article>
+
+        <article class="dashboard-panel exposure-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="panel-kicker">EXPOSURE</span>
+              <h2>高胜率交易员多空敞口</h2>
+            </div>
+            <span id="positionBias" class="panel-badge">计算中</span>
+          </div>
+          <div class="exposure-visual" aria-label="多空敞口比例">
+            <div id="longBar" class="exposure-bar long"></div>
+            <div id="shortBar" class="exposure-bar short"></div>
+          </div>
+          <div class="exposure-values">
+            <div>
+              <span class="legend long"></span>
+              <p>多头敞口</p>
+              <strong id="longExposure">—</strong>
+            </div>
+            <div class="align-right">
+              <span class="legend short"></span>
+              <p>空头敞口</p>
+              <strong id="shortExposure">—</strong>
+            </div>
+          </div>
+        </article>
+
+        <article class="dashboard-panel ranking-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="panel-kicker">LEADERS</span>
+              <h2>头部交易员</h2>
+            </div>
+            <a class="panel-link" href="/leaderboard">查看完整排行 →</a>
+          </div>
+          <div id="dashboardLeaders" class="leader-list">
+            <p class="dashboard-empty">正在载入头部交易员</p>
+          </div>
+        </article>
+      </section>
+
+      <footer class="dashboard-footer">
+        <span>HyperStats / 数据仅供研究，不构成投资建议</span>
+        <span id="footerAnalysisTime">分析数据更新：—</span>
+      </footer>
     </main>
 
-    <dialog id="detailDialog">
-      <div class="dialog-header">
-        <strong id="detailTitle">地址详情</strong>
-        <form method="dialog">
-          <button class="icon-button close" title="关闭" aria-label="关闭详情">×</button>
-        </form>
-      </div>
-      <div class="dialog-content">
-        <section class="detail-section">
-          <h2>汇总数据</h2>
-          <div id="detailContent" class="detail-table-wrap"></div>
-        </section>
-        <section class="detail-section">
-          <h2>交易明细</h2>
-          <div id="tradeContent" class="detail-table-wrap" hidden></div>
-          <div id="tradePager" class="trade-pager" hidden>
-            <button id="prevTradePage" class="secondary-button" type="button">上一页</button>
-            <span id="tradePageLabel">第 1 页</span>
-            <button id="nextTradePage" class="secondary-button" type="button">下一页</button>
-          </div>
-        </section>
-      </div>
-    </dialog>
-
-    <script src="/static/app.js"></script>
+    <script src="/static/dashboard.js"></script>
   </body>
 </html>

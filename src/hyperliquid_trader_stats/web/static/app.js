@@ -520,6 +520,10 @@ document.querySelector("#nextPage").addEventListener("click", () => {
 });
 
 updateSortHeaders();
+const initialAddress = new URLSearchParams(window.location.search).get("address");
+if (initialAddress) {
+  document.querySelector("#search").value = initialAddress;
+}
 loadData().catch((error) => {
   resultSummary.textContent = `加载失败：${error.message}`;
 });

@@ -20,6 +20,53 @@ def test_cli_parses_fetch_user_fills_options():
     assert args.incremental is False
 
 
+def test_cli_defaults_fetch_user_states_to_incremental():
+    parser = build_parser()
+
+    args = parser.parse_args(["fetch-user-states"])
+
+    assert args.incremental is True
+    assert args.updated_before is None
+
+
+def test_cli_parses_fetch_user_states_full_refresh():
+    parser = build_parser()
+
+    args = parser.parse_args(["fetch-user-states", "--no-incremental"])
+
+    assert args.incremental is False
+    assert args.updated_before is None
+
+
+def test_cli_parses_fetch_user_states_updated_before():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        ["fetch-user-states", "--updated-before", "2026-06-01"]
+    )
+
+    assert args.incremental is True
+    assert args.updated_before == datetime(2026, 6, 1)
+
+
+def test_cli_rejects_multiple_fetch_user_states_modes():
+    parser = build_parser()
+
+    try:
+        parser.parse_args(
+            [
+                "fetch-user-states",
+                "--no-incremental",
+                "--updated-before",
+                "2026-06-01",
+            ]
+        )
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("互斥的状态采集模式参数应解析失败")
+
+
 def test_cli_parses_large_index_initialization_option():
     parser = build_parser()
 

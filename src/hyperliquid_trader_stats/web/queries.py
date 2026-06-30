@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime, timezone
 from math import ceil
 from typing import Any, Optional
 
 from hyperliquid_trader_stats.db.collections import (
+    web3_hyperliquid_hyper_x_analyze_result_collection,
     web3_hyperliquid_hyper_x_addresses_collection,
     web3_hyperliquid_hyper_x_completed_trades_collection,
 )
@@ -27,6 +29,10 @@ SORT_FIELDS = {
 }
 
 JOINED_SORT_FIELDS = {"position_value", "account_value"}
+ADDRESS_SORT_FIELDS = {
+    "position_value": "effective_position_value",
+    "account_value": "marginSummary.accountValue",
+}
 TOTAL_TRADES_RANK_INDEX = "total_trades_rank_fields"
 
 ENTRY_VALUE_FIELDS = {
@@ -41,10 +47,14 @@ def _build_completed_match(filters: dict[str, Any]) -> dict[str, Any]:
     completed_match: dict[str, Any] = {}
     search = filters.get("search")
     if search:
-        completed_match["ethAddress"] = {
-            "$regex": search.strip(),
-            "$options": "i",
-        }
+        search_term = search.strip()
+        if search_term.startswith("0x") and len(search_term) == 42:
+            completed_match["ethAddress"] = search_term
+        else:
+            completed_match["ethAddress"] = {
+                "$regex": re.escape(search_term),
+                "$options": "i",
+            }
 
     _number_filter(
         completed_match,
@@ -152,6 +162,164 @@ def _as_utc_naive(value: datetime) -> datetime:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _build_address_first_trader_pipeline(
+    *,
+    page: int,
+    page_size: int,
+    completed_match: dict[str, Any],
+    joined_match: dict[str, Any],
+    sort_by: str,
+    sort_dir: str,
+) -> list[dict[str, Any]]:
+    """Build an index-friendly pipeline starting from account state."""
+    sort_value = 1 if sort_dir == "asc" else -1
+    skip = (page - 1) * page_size
+    pipeline: list[dict[str, Any]] = []
+
+    if joined_match:
+        pipeline.append({"$match": joined_match})
+
+    address_sort_field = ADDRESS_SORT_FIELDS.get(sort_by)
+    if address_sort_field:
+        pipeline.append(
+            {
+                "$sort": {
+                    address_sort_field: sort_value,
+                    "ethAddress": -sort_value,
+                }
+            }
+        )
+
+    pipeline.append(
+        {
+            "$project": {
+                "_id": 0,
+                "ethAddress": 1,
+                "effective_position_value": 1,
+                "account_value": "$marginSummary.accountValue",
+                "withdrawable": 1,
+                "state_updated_at": "$updated_at",
+            }
+        }
+    )
+
+    lookup_pipeline: list[dict[str, Any]] = []
+    if completed_match:
+        lookup_pipeline.append({"$match": completed_match})
+    lookup_pipeline.append({"$project": _trader_projection()})
+    item_pipeline: list[dict[str, Any]] = [
+        {
+            "$lookup": {
+                "from": web3_hyperliquid_hyper_x_completed_trades_collection.name,
+                "localField": "ethAddress",
+                "foreignField": "ethAddress",
+                "pipeline": lookup_pipeline,
+                "as": "completed",
+            }
+        },
+        {"$unwind": "$completed"},
+        {
+            "$replaceRoot": {
+                "newRoot": {
+                    "$mergeObjects": [
+                        "$completed",
+                        {
+                            "effective_position_value": "$effective_position_value",
+                            "account_value": "$account_value",
+                            "withdrawable": "$withdrawable",
+                            "state_updated_at": "$state_updated_at",
+                        },
+                    ]
+                }
+            }
+        },
+    ]
+
+    if not address_sort_field:
+        sort_field = SORT_FIELDS.get(sort_by, SORT_FIELDS["win_rate_score"])
+        item_pipeline.append(
+            {"$sort": {sort_field: sort_value, "ethAddress": -sort_value}}
+        )
+
+    item_pipeline.extend(
+        [
+            {"$skip": skip},
+            {"$limit": page_size},
+            _project_trader_row(),
+        ]
+    )
+    pipeline.append(
+        {
+            "$facet": {
+                "items": item_pipeline,
+                "metadata": [{"$count": "total"}],
+            }
+        }
+    )
+    return pipeline
+
+
+def _build_completed_first_joined_pipeline(
+    *,
+    page: int,
+    page_size: int,
+    completed_match: dict[str, Any],
+    joined_match: dict[str, Any],
+    sort_by: str,
+    sort_dir: str,
+) -> list[dict[str, Any]]:
+    """Build a joined-filter pipeline that preserves completed-trade sorting."""
+    sort_value = 1 if sort_dir == "asc" else -1
+    sort_field = SORT_FIELDS.get(sort_by, SORT_FIELDS["win_rate_score"])
+    skip = (page - 1) * page_size
+    pipeline: list[dict[str, Any]] = []
+    if completed_match:
+        pipeline.append({"$match": completed_match})
+    pipeline.extend(
+        [
+            {"$sort": {sort_field: sort_value, "ethAddress": -sort_value}},
+            {"$project": _trader_projection()},
+        ]
+    )
+
+    address_lookup_pipeline: list[dict[str, Any]] = []
+    if joined_match:
+        address_lookup_pipeline.append({"$match": joined_match})
+    address_lookup_pipeline.append({"$project": _address_state_projection()})
+    item_pipeline = [
+        {
+            "$lookup": {
+                "from": web3_hyperliquid_hyper_x_addresses_collection.name,
+                "localField": "ethAddress",
+                "foreignField": "ethAddress",
+                "pipeline": address_lookup_pipeline,
+                "as": "address_state",
+            }
+        },
+        {"$unwind": "$address_state"},
+        {
+            "$addFields": {
+                "effective_position_value": "$address_state.effective_position_value",
+                "account_value": "$address_state.marginSummary.accountValue",
+                "withdrawable": "$address_state.withdrawable",
+                "state_updated_at": "$address_state.updated_at",
+            }
+        },
+        {"$skip": skip},
+        {"$limit": page_size},
+        _project_trader_row(),
+    ]
+    pipeline.append(
+        {
+            "$facet": {
+                "items": item_pipeline,
+                "metadata": [{"$count": "total"}],
+            }
+        }
+    )
+    return pipeline
+
+
 def build_trader_pipeline(
     *,
     page: int = 1,
@@ -198,81 +366,29 @@ def build_trader_pipeline(
     page = max(page, 1)
     page_size = min(max(page_size, 1), 200)
     skip = (page - 1) * page_size
-    needs_join_before_paging = bool(joined_match) or sort_by in JOINED_SORT_FIELDS
+
+    if sort_by in JOINED_SORT_FIELDS:
+        return _build_address_first_trader_pipeline(
+            page=page,
+            page_size=page_size,
+            completed_match=completed_match,
+            joined_match=joined_match,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
+    if joined_match:
+        return _build_completed_first_joined_pipeline(
+            page=page,
+            page_size=page_size,
+            completed_match=completed_match,
+            joined_match=joined_match,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
 
     pipeline: list[dict[str, Any]] = []
     if completed_match:
         pipeline.append({"$match": completed_match})
-
-    if not needs_join_before_paging:
-        pipeline.extend(
-            [
-                {"$sort": {sort_field: sort_value, "ethAddress": -sort_value}},
-                {
-                    "$facet": {
-                        "items": [
-                            {"$skip": skip},
-                            {"$limit": page_size},
-                            {
-                                "$lookup": {
-                                    "from": web3_hyperliquid_hyper_x_addresses_collection.name,
-                                    "localField": "ethAddress",
-                                    "foreignField": "ethAddress",
-                                    "as": "address_state",
-                                }
-                            },
-                            {
-                                "$unwind": {
-                                    "path": "$address_state",
-                                    "preserveNullAndEmptyArrays": True,
-                                }
-                            },
-                            {
-                                "$addFields": {
-                                    "effective_position_value": "$address_state.effective_position_value",
-                                    "account_value": "$address_state.marginSummary.accountValue",
-                                    "withdrawable": "$address_state.withdrawable",
-                                    "state_updated_at": "$address_state.updated_at",
-                                }
-                            },
-                            _project_trader_row(),
-                        ],
-                        "metadata": [{"$count": "total"}],
-                    }
-                },
-            ]
-        )
-        return pipeline
-
-    pipeline.extend(
-        [
-            {
-                "$lookup": {
-                    "from": web3_hyperliquid_hyper_x_addresses_collection.name,
-                    "localField": "ethAddress",
-                    "foreignField": "ethAddress",
-                    "as": "address_state",
-                }
-            },
-            {
-                "$unwind": {
-                    "path": "$address_state",
-                    "preserveNullAndEmptyArrays": True,
-                }
-            },
-            {
-                "$addFields": {
-                    "effective_position_value": "$address_state.effective_position_value",
-                    "account_value": "$address_state.marginSummary.accountValue",
-                    "withdrawable": "$address_state.withdrawable",
-                    "state_updated_at": "$address_state.updated_at",
-                }
-            },
-        ]
-    )
-
-    if joined_match:
-        pipeline.append({"$match": joined_match})
 
     pipeline.extend(
         [
@@ -282,6 +398,28 @@ def build_trader_pipeline(
                     "items": [
                         {"$skip": skip},
                         {"$limit": page_size},
+                        {
+                            "$lookup": {
+                                "from": web3_hyperliquid_hyper_x_addresses_collection.name,
+                                "localField": "ethAddress",
+                                "foreignField": "ethAddress",
+                                "as": "address_state",
+                            }
+                        },
+                        {
+                            "$unwind": {
+                                "path": "$address_state",
+                                "preserveNullAndEmptyArrays": True,
+                            }
+                        },
+                        {
+                            "$addFields": {
+                                "effective_position_value": "$address_state.effective_position_value",
+                                "account_value": "$address_state.marginSummary.accountValue",
+                                "withdrawable": "$address_state.withdrawable",
+                                "state_updated_at": "$address_state.updated_at",
+                            }
+                        },
                         _project_trader_row(),
                     ],
                     "metadata": [{"$count": "total"}],
@@ -417,6 +555,69 @@ async def _list_traders_by_page_ids(
     return items, total
 
 
+async def _list_traders_by_completed_sort_and_state_filter(
+    *,
+    page: int,
+    page_size: int,
+    filters: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int]:
+    """Intersect indexed state matches with completed rows, then sort the subset."""
+    completed_match = _build_completed_match(filters)
+    joined_match = _build_joined_match(filters)
+    sort_by = filters.get("sort_by", "win_rate_score")
+    sort_field = SORT_FIELDS.get(sort_by, SORT_FIELDS["win_rate_score"])
+    sort_value = 1 if filters.get("sort_dir", "desc") == "asc" else -1
+    skip = (page - 1) * page_size
+
+    state_refs = await web3_hyperliquid_hyper_x_addresses_collection.find(
+        joined_match,
+        {"_id": 0, "ethAddress": 1},
+    ).to_list(length=None)
+    matching_addresses = [row["ethAddress"] for row in state_refs]
+    if not matching_addresses:
+        return [], 0
+
+    address_match = {"ethAddress": {"$in": matching_addresses}}
+    intersection_match = (
+        {"$and": [completed_match, address_match]}
+        if completed_match
+        else address_match
+    )
+    page_cursor = (
+        web3_hyperliquid_hyper_x_completed_trades_collection.find(
+            intersection_match,
+            _trader_projection(),
+        )
+        .sort([(sort_field, sort_value), ("ethAddress", -sort_value)])
+        .skip(skip)
+        .limit(page_size)
+    )
+    completed_rows, total = await asyncio.gather(
+        page_cursor.to_list(length=page_size),
+        web3_hyperliquid_hyper_x_completed_trades_collection.count_documents(
+            intersection_match
+        ),
+    )
+    page_addresses = [row["ethAddress"] for row in completed_rows]
+    state_rows = await web3_hyperliquid_hyper_x_addresses_collection.find(
+        {"ethAddress": {"$in": page_addresses}},
+        _address_state_projection(),
+    ).to_list(length=page_size)
+    state_by_address = {row["ethAddress"]: row for row in state_rows}
+
+    items: list[dict[str, Any]] = []
+    for row in completed_rows:
+        address = row["ethAddress"]
+        state = state_by_address.get(address, {})
+        margin_summary = state.get("marginSummary") or {}
+        row["effective_position_value"] = state.get("effective_position_value")
+        row["account_value"] = margin_summary.get("accountValue")
+        row["withdrawable"] = state.get("withdrawable")
+        row["state_updated_at"] = state.get("updated_at")
+        items.append(row)
+    return items, total
+
+
 def serialize_document(value: Any) -> Any:
     """Convert MongoDB/Python values into JSON-friendly structures."""
     if isinstance(value, datetime):
@@ -449,8 +650,27 @@ async def list_traders(**filters: Any) -> dict[str, Any]:
             "pages": ceil(total / page_size) if total else 0,
         }
 
+    if joined_match and sort_by not in JOINED_SORT_FIELDS:
+        items, total = await _list_traders_by_completed_sort_and_state_filter(
+            page=page,
+            page_size=page_size,
+            filters=filters,
+        )
+        return {
+            "items": serialize_document(items),
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "pages": ceil(total / page_size) if total else 0,
+        }
+
     pipeline = build_trader_pipeline(page=page, page_size=page_size, **filters)
-    rows = await web3_hyperliquid_hyper_x_completed_trades_collection.aggregate(
+    aggregate_collection = (
+        web3_hyperliquid_hyper_x_addresses_collection
+        if sort_by in JOINED_SORT_FIELDS
+        else web3_hyperliquid_hyper_x_completed_trades_collection
+    )
+    rows = await aggregate_collection.aggregate(
         pipeline
     ).to_list(length=1)
     result = rows[0] if rows else {"items": [], "metadata": []}
@@ -462,6 +682,46 @@ async def list_traders(**filters: Any) -> dict[str, Any]:
         "total": total,
         "pages": ceil(total / page_size) if total else 0,
     }
+
+
+async def get_dashboard_summary() -> dict[str, Any]:
+    """Return the latest precomputed analysis and index-backed leader data."""
+    top_cursor = (
+        web3_hyperliquid_hyper_x_completed_trades_collection.find(
+            {},
+            {
+                "_id": 0,
+                "ethAddress": 1,
+                "win_rate": 1,
+                "win_rate_score": 1,
+                "total_trades": 1,
+                "completed_trade_pnl.net": 1,
+            },
+        )
+        .sort([("win_rate_score", -1), ("ethAddress", 1)])
+        .limit(6)
+    )
+    latest_analysis, top_traders, tracked_addresses, trader_count = await asyncio.gather(
+        web3_hyperliquid_hyper_x_analyze_result_collection.find_one(
+            {},
+            {"_id": 0},
+            sort=[("timestamp", -1)],
+        ),
+        top_cursor.to_list(length=6),
+        web3_hyperliquid_hyper_x_addresses_collection.estimated_document_count(),
+        web3_hyperliquid_hyper_x_completed_trades_collection.estimated_document_count(),
+    )
+
+    analysis = latest_analysis or {}
+    result = {
+        "tracked_addresses": analysis.get("total_addresses", tracked_addresses),
+        "trader_count": analysis.get("analyzed_addresses", trader_count),
+        "winrate_distribution": analysis.get("winrate_distribution", {}),
+        "position_distribution": analysis.get("position_distribution", {}),
+        "analysis_updated_at": analysis.get("timestamp"),
+        "top_traders": top_traders,
+    }
+    return serialize_document(result)
 
 
 async def get_trader_detail(address: str) -> Optional[dict[str, Any]]:
