@@ -68,6 +68,70 @@ def _add_position(distribution: dict, key: str, pos_value: float):
     _add_position_item(distribution[key], pos_value)
 
 
+def _extract_coin_position_values(state: dict) -> dict[str, float]:
+    """将一个地址的当前仓位整理为币种到带方向仓位价值的映射。"""
+    position_values: dict[str, float] = {}
+    if not isinstance(state, dict):
+        return position_values
+
+    asset_positions = state.get("assetPositions", [])
+    if not isinstance(asset_positions, list):
+        return position_values
+
+    for item in asset_positions:
+        if not isinstance(item, dict):
+            continue
+        position = item.get("position")
+        if not isinstance(position, dict):
+            continue
+
+        coin = position.get("coin")
+        if not isinstance(coin, str) or not coin.strip():
+            continue
+
+        try:
+            size = float(position.get("szi"))
+            value = abs(float(position.get("positionValue")))
+        except (TypeError, ValueError):
+            continue
+        if size == 0 or value == 0:
+            continue
+
+        signed_value = value if size > 0 else -value
+        normalized_coin = coin.strip()
+        position_values[normalized_coin] = (
+            position_values.get(normalized_coin, 0.0) + signed_value
+        )
+
+    return {
+        coin: value
+        for coin, value in position_values.items()
+        if value != 0
+    }
+
+
+def _add_coin_positions(
+    distribution: dict,
+    coin_positions: dict[str, float],
+    win_rate: float,
+):
+    """按币种和胜率门槛累计一个地址的当前仓位。"""
+    matched_keys = [
+        f"ge_{threshold}"
+        for threshold in WINRATE_THRESHOLDS
+        if win_rate >= threshold
+    ]
+    if win_rate == 100:
+        matched_keys.append("eq_100")
+
+    for coin, position_value in coin_positions.items():
+        coin_distribution = distribution.setdefault(
+            coin, _empty_distribution(POSITION_KEYS)
+        )
+        for key in matched_keys:
+            _add_position(coin_distribution, key, position_value)
+
+
 def _finalize_distribution(distribution: dict):
     for item in distribution.values():
         long_count = item["long"]
@@ -116,6 +180,7 @@ async def analyze_winrate_and_positions():
                 - short_value_sum (float): 空头仓位有效价值总和。
                 - ratio (float 或 None): 多空地址数量比值（long/short，若 short > 0 则计算，否则为 None）。
                 - value_ratio (float 或 None): 多空仓位价值总和比值（long_value_sum/short_value_sum，若 short_value_sum > 0 则计算，否则为 None）。
+            - coin_position_distribution (dict): 按币种及上述胜率门槛聚合的当前多空仓位分布。
 
     异常：
         如果发生异常（如数据库连接失败），记录错误日志并返回空字典 {}。
@@ -137,11 +202,20 @@ async def analyze_winrate_and_positions():
 
         addresses_cursor = web3_hyperliquid_hyper_x_addresses_collection.find(
             {"effective_position_value": {"$exists": True, "$ne": None}},
-            {"ethAddress": 1, "effective_position_value": 1},
+            {
+                "ethAddress": 1,
+                "effective_position_value": 1,
+                "state.assetPositions": 1,
+            },
         ).batch_size(5000)
         addresses_data = {}
+        coin_positions_by_address = {}
         async for doc in addresses_cursor:
-            addresses_data[doc["ethAddress"]] = doc["effective_position_value"]
+            address = doc["ethAddress"]
+            addresses_data[address] = doc["effective_position_value"]
+            coin_positions_by_address[address] = _extract_coin_position_values(
+                doc.get("state", {})
+            )
             if len(addresses_data) % 10000 == 0:
                 logger.info("已读取 %s 个地址的仓位数据", len(addresses_data))
         logger.info(f"获取到 {len(addresses_data)} 个地址的仓位数据")
@@ -149,6 +223,7 @@ async def analyze_winrate_and_positions():
 
         winrate_distribution = {f"ge_{thresh}": 0 for thresh in WINRATE_THRESHOLDS}
         position_distribution = _empty_distribution(POSITION_KEYS)
+        coin_position_distribution = {}
         value_position_distribution = {
             key: {
                 f"ge_{thresh}": _empty_position_item()
@@ -192,6 +267,11 @@ async def analyze_winrate_and_positions():
                             )
                     if win_rate == 100:
                         _add_position(position_distribution, "eq_100", pos_value)
+                _add_coin_positions(
+                    coin_position_distribution,
+                    coin_positions_by_address.get(addr, {}),
+                    win_rate,
+                )
 
             entry_summary = doc.get("entry_value_summary")
             if not entry_summary:
@@ -224,11 +304,15 @@ async def analyze_winrate_and_positions():
         step_started_at = _log_elapsed(step_started_at, "读取并统计交易数据")
 
         _finalize_distribution(position_distribution)
+        for distribution in coin_position_distribution.values():
+            _finalize_distribution(distribution)
+        coin_position_distribution = dict(sorted(coin_position_distribution.items()))
         for key in value_position_distribution:
             _finalize_distribution(value_position_distribution[key])
 
         logger.info(f"胜率分布: {winrate_distribution}")
         logger.info(f"多空分布: {position_distribution}")
+        logger.info("按币种多空分布: %s", coin_position_distribution)
         logger.info(
             f"各仓位价值区间各胜率阈值的多空分布: {value_position_distribution}"
         )
@@ -239,6 +323,7 @@ async def analyze_winrate_and_positions():
             "analyzed_addresses": analyzed_addresses,
             "winrate_distribution": winrate_distribution,
             "position_distribution": position_distribution,
+            "coin_position_distribution": coin_position_distribution,
             "value_position_distribution": value_position_distribution,  # 新增
             "timestamp": datetime.utcnow(),  # 添加时间戳
         }

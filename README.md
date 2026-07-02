@@ -363,6 +363,11 @@ hyper-stats analyze-ls-rate --basic --no-store-result --visualize-result
 | `hyper-stats analyze-ls-rate --basic --visualize-result` | 使用基础分析器，保存多张图片到 `plots/`：`pie_address_*.png`、`bar_winrate_*.png`、`bar_position_counts_*.png`、`line_ratio_*.png`、`line_value_ratio_*.png`、`bar_value_sums_*.png`。 |
 | `hyper-stats analyze-ls-rate --basic --no-store-result --visualize-result` | 同基础分析导图，但不把分析快照写入 MongoDB。 |
 
+进阶分析写入的综合快照还包含 `coin_position_distribution`：它读取各地址
+`state.assetPositions` 中的最新仓位，按币种和 `ge_50`、`ge_60`、`ge_70`、
+`ge_80`、`ge_90`、`eq_100` 胜率门槛汇总多空人数、仓位价值、人数比和价值比。
+快照中不保存地址明细，也不会额外生成地址级历史仓位记录。
+
 参数说明：
 
 | 参数 | 作用 |

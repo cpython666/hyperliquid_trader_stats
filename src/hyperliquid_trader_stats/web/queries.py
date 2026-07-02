@@ -718,6 +718,9 @@ async def get_dashboard_summary() -> dict[str, Any]:
         "trader_count": analysis.get("analyzed_addresses", trader_count),
         "winrate_distribution": analysis.get("winrate_distribution", {}),
         "position_distribution": analysis.get("position_distribution", {}),
+        "coin_position_distribution": analysis.get(
+            "coin_position_distribution", {}
+        ),
         "analysis_updated_at": analysis.get("timestamp"),
         "top_traders": top_traders,
     }
