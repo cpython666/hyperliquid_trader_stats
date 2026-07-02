@@ -128,6 +128,7 @@ def test_cli_exposes_expected_commands():
         "compute-trades",
         "analyze-ls-rate",
         "analyze-history",
+        "visualize-coin-value-ratio",
     }.issubset(subparser_action.choices)
 
 
@@ -180,6 +181,43 @@ def test_cli_parses_analyze_history_big_no_show():
 
     assert args.mode == "big"
     assert args.output_dir == "plots_tmp"
+    assert args.show is False
+
+
+def test_cli_parses_visualize_coin_value_ratio_defaults():
+    parser = build_parser()
+
+    args = parser.parse_args(["visualize-coin-value-ratio"])
+
+    assert args.analysis_id is None
+    assert args.winrate_key is None
+    assert args.top == 30
+    assert args.output_dir == "plots_tmp"
+    assert args.show is True
+
+
+def test_cli_parses_visualize_coin_value_ratio_options():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "visualize-coin-value-ratio",
+            "--analysis-id",
+            "686694116fc51490b88ff79f",
+            "--winrate-key",
+            "ge_80",
+            "--top",
+            "15",
+            "--output-dir",
+            "coin_plots",
+            "--no-show",
+        ]
+    )
+
+    assert args.analysis_id == "686694116fc51490b88ff79f"
+    assert args.winrate_key == "ge_80"
+    assert args.top == 15
+    assert args.output_dir == "coin_plots"
     assert args.show is False
 
 

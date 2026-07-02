@@ -154,6 +154,21 @@ async def analyze_history_command(args):
     )
 
 
+async def visualize_coin_value_ratio_command(args):
+    """绘制单次分析快照中的币种多空价值比排行。"""
+    from hyperliquid_trader_stats.plotting.visualize_coin_value_ratio import (
+        visualize_coin_value_ratio,
+    )
+
+    await visualize_coin_value_ratio(
+        analysis_id=args.analysis_id,
+        winrate_key=args.winrate_key,
+        top=args.top,
+        output_dir=args.output_dir or None,
+        show=args.show,
+    )
+
+
 async def update_high_winrate_positions_command(_args):
     """刷新高胜率地址的最新持仓状态。"""
     from hyperliquid_trader_stats.services.update_high_win_rate_user_state import (
@@ -380,6 +395,47 @@ def build_parser():
         help="是否显示 Matplotlib 窗口；使用 --no-show 可只保存文件。",
     )
     history.set_defaults(handler=analyze_history_command)
+
+    coin_value_ratio = subparsers.add_parser(
+        "visualize-coin-value-ratio",
+        help="绘制币种多空价值比排行。",
+        description=(
+            "从 web3_hyperliquid_hyper_x_analyze_result 读取一次分析快照，"
+            "按 coin_position_distribution 绘制各币种多空价值比排行。"
+        ),
+    )
+    coin_value_ratio.add_argument(
+        "--analysis-id",
+        default=None,
+        help="可选的 analyze_result 文档 _id；不传则使用 timestamp 最新的一条。",
+    )
+    coin_value_ratio.add_argument(
+        "--winrate-key",
+        choices=["ge_50", "ge_60", "ge_70", "ge_80", "ge_90", "eq_100"],
+        default=None,
+        help=(
+            "指定单个胜率门槛并按该门槛多空价值比全量排序展示；"
+            "不传则按 ge_50 的多空仓位价值绝对值合计排序。"
+        ),
+    )
+    coin_value_ratio.add_argument(
+        "--top",
+        type=positive_int,
+        default=30,
+        help="最多展示多少个币种，默认 30。",
+    )
+    coin_value_ratio.add_argument(
+        "--output-dir",
+        default="plots_tmp",
+        help="PNG 保存目录；传空字符串可关闭保存，默认 plots_tmp。",
+    )
+    coin_value_ratio.add_argument(
+        "--show",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="是否显示 Matplotlib 窗口；使用 --no-show 可只保存文件。",
+    )
+    coin_value_ratio.set_defaults(handler=visualize_coin_value_ratio_command)
 
     update_high_winrate = subparsers.add_parser(
         "update-high-winrate-positions",
