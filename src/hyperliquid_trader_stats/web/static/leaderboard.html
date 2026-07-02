@@ -126,7 +126,12 @@
               <option value="wilson">Wilson 下界</option>
               <option value="total_trades">交易数</option>
               <option value="net_pnl">净盈亏</option>
+              <option value="avg_trade_pnl">平均单笔 PnL</option>
+              <option value="median_trade_pnl">中位数单笔 PnL</option>
+              <option value="max_profit_trade">最大盈利单</option>
+              <option value="max_loss_trade">最大亏损单</option>
               <option value="position_value">持仓价值</option>
+              <option value="avg_duration">平均持仓时间</option>
               <option value="account_value">账户价值</option>
               <option value="updated_at">统计更新时间</option>
             </select>
@@ -189,8 +194,33 @@
                   </button>
                 </th>
                 <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="avg_trade_pnl">
+                    平均单笔 PnL <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="median_trade_pnl">
+                    中位单笔 PnL <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="max_profit_trade">
+                    最大盈利单 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="max_loss_trade">
+                    最大亏损单 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
                   <button class="sort-header" type="button" data-sort-by="position_value">
                     持仓价值 <span class="sort-indicator" aria-hidden="true">↕</span>
+                  </button>
+                </th>
+                <th aria-sort="none">
+                  <button class="sort-header" type="button" data-sort-by="avg_duration">
+                    平均持仓 <span class="sort-indicator" aria-hidden="true">↕</span>
                   </button>
                 </th>
                 <th>1w / 10w / 100w</th>

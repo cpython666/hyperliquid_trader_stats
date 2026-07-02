@@ -66,7 +66,7 @@ async def traders(
     updated_before: Optional[datetime] = None,
     sort_by: str = Query(
         "win_rate_score",
-        pattern="^(win_rate|win_rate_score|wilson|total_trades|net_pnl|pnl|fees|avg_duration|updated_at|processed_through|position_value|account_value)$",
+        pattern="^(win_rate|win_rate_score|wilson|total_trades|net_pnl|pnl|fees|avg_trade_pnl|median_trade_pnl|max_profit_trade|max_loss_trade|avg_duration|updated_at|processed_through|position_value|account_value)$",
     ),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
 ):

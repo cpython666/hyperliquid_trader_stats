@@ -85,6 +85,27 @@ function formatDate(value) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+function formatDurationMinutes(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return "-";
+  }
+  const totalMinutes = Math.round(Number(value));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  const parts = [];
+  if (days) {
+    parts.push(`${days}d`);
+  }
+  if (hours) {
+    parts.push(`${hours}h`);
+  }
+  if (minutes || !parts.length) {
+    parts.push(`${minutes}m`);
+  }
+  return parts.join(" ");
+}
+
 function shortAddress(address) {
   if (!address || address.length < 16) {
     return address || "-";
@@ -260,12 +281,13 @@ function renderTradesTable(items) {
 function renderRows(items) {
   rows.innerHTML = "";
   if (!items.length) {
-    rows.innerHTML = `<tr><td colspan="8" class="muted">没有符合条件的数据</td></tr>`;
+    rows.innerHTML = `<tr><td colspan="13" class="muted">没有符合条件的数据</td></tr>`;
     return;
   }
 
   for (const item of items) {
     const net = item.completed_trade_pnl?.net;
+    const pnl = item.completed_trade_pnl || {};
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>
@@ -305,7 +327,12 @@ function renderRows(items) {
       <td>${formatNumber(item.win_rate_score)}</td>
       <td>${item.winning_trades ?? 0} / ${item.total_trades ?? 0}</td>
       <td class="${pnlClass(net)}">${formatNumber(net)}</td>
+      <td class="${pnlClass(pnl.avg_trade_net)}">${formatNumber(pnl.avg_trade_net)}</td>
+      <td class="${pnlClass(pnl.median_trade_net)}">${formatNumber(pnl.median_trade_net)}</td>
+      <td class="${pnlClass(pnl.max_profit_trade_net)}">${formatNumber(pnl.max_profit_trade_net)}</td>
+      <td class="${pnlClass(pnl.max_loss_trade_net)}">${formatNumber(pnl.max_loss_trade_net)}</td>
       <td class="${pnlClass(item.effective_position_value)}">${formatNumber(item.effective_position_value, 3)}</td>
+      <td>${formatDurationMinutes(item.duration_stats?.avg_duration_minutes)}</td>
       <td>${entryRates(item.entry_value_summary)}</td>
       <td>${formatDate(item.updated_at)}</td>
     `;
