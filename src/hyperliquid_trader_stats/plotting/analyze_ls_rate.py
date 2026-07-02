@@ -8,7 +8,7 @@ import seaborn as sns
 from motor.motor_asyncio import AsyncIOMotorCollection
 from hyperliquid_trader_stats.db.collections import (
     web3_hyperliquid_hyper_x_addresses_collection,
-    web3_hyperliquid_hyper_x_completed_trades_collection, web3_hyperliquid_hyper_x_analyze_result_collection
+    web3_hyperliquid_hyper_x_trade_summary_collection, web3_hyperliquid_hyper_x_analyze_result_collection
 )
 
 # 设置全局字体为支持中文的字体
@@ -26,14 +26,14 @@ logger = logging.getLogger(__name__)
 
 async def analyze_winrate_and_positions(
         addresses_collection: AsyncIOMotorCollection = web3_hyperliquid_hyper_x_addresses_collection,
-        trades_collection: AsyncIOMotorCollection = web3_hyperliquid_hyper_x_completed_trades_collection
+        trades_collection: AsyncIOMotorCollection = web3_hyperliquid_hyper_x_trade_summary_collection
 ):
     """
     统计地址总数、已分析交易地址数、胜率分布及多空仓位分布。
 
     参数：
         addresses_collection (AsyncIOMotorCollection): 存储地址数据的 MongoDB 集合，默认为 web3_hyperliquid_hyper_x_addresses_collection。
-        trades_collection (AsyncIOMotorCollection): 存储交易数据的 MongoDB 集合，默认为 web3_hyperliquid_hyper_x_completed_trades_collection。
+        trades_collection (AsyncIOMotorCollection): 存储交易数据的 MongoDB 集合，默认为 web3_hyperliquid_hyper_x_trade_summary_collection。
 
     返回：
         dict: 包含以下统计结果的字典：

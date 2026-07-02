@@ -33,7 +33,7 @@ class _FakeCursor:
         return self.rows[self.skip_value:end]
 
 
-class _FakeCompletedCollection:
+class _FakeTradeSummaryCollection:
     def __init__(self):
         self.aggregate_called = False
         self.count_hint = None
@@ -94,6 +94,24 @@ class _FakeDetailCollection:
         self.last_match = match
         self.last_projection = projection
         return self.result
+
+
+class _FakeTradeRowsCollection:
+    def __init__(self, rows, total):
+        self.rows = rows
+        self.total = total
+        self.last_match = None
+        self.last_projection = None
+        self.last_count_match = None
+
+    def find(self, match, projection):
+        self.last_match = match
+        self.last_projection = projection
+        return _FakeCursor(self.rows)
+
+    async def count_documents(self, match):
+        self.last_count_match = match
+        return self.total
 
 
 def test_build_trader_pipeline_applies_completed_and_joined_filters():
@@ -178,11 +196,11 @@ def test_build_trader_pipeline_paginates_and_caps_page_size():
 
 
 def test_list_traders_pages_by_address_before_fetching_rows(monkeypatch):
-    completed = _FakeCompletedCollection()
+    summary = _FakeTradeSummaryCollection()
     monkeypatch.setattr(
         queries,
-        "web3_hyperliquid_hyper_x_completed_trades_collection",
-        completed,
+        "web3_hyperliquid_hyper_x_trade_summary_collection",
+        summary,
     )
     monkeypatch.setattr(
         queries,
@@ -199,8 +217,8 @@ def test_list_traders_pages_by_address_before_fetching_rows(monkeypatch):
         )
     )
 
-    assert completed.aggregate_called is False
-    assert completed.id_cursor.sort_spec == [
+    assert summary.aggregate_called is False
+    assert summary.id_cursor.sort_spec == [
         ("win_rate", -1),
         ("ethAddress", 1),
     ]
@@ -210,11 +228,11 @@ def test_list_traders_pages_by_address_before_fetching_rows(monkeypatch):
 
 
 def test_total_trades_filter_uses_covered_rank_index(monkeypatch):
-    completed = _FakeCompletedCollection()
+    summary = _FakeTradeSummaryCollection()
     monkeypatch.setattr(
         queries,
-        "web3_hyperliquid_hyper_x_completed_trades_collection",
-        completed,
+        "web3_hyperliquid_hyper_x_trade_summary_collection",
+        summary,
     )
     monkeypatch.setattr(
         queries,
@@ -232,12 +250,12 @@ def test_total_trades_filter_uses_covered_rank_index(monkeypatch):
         )
     )
 
-    assert completed.id_cursor.hint_value == queries.TOTAL_TRADES_RANK_INDEX
-    assert completed.count_hint == queries.TOTAL_TRADES_RANK_INDEX
+    assert summary.id_cursor.hint_value == queries.TOTAL_TRADES_RANK_INDEX
+    assert summary.count_hint == queries.TOTAL_TRADES_RANK_INDEX
 
 
-def test_trader_detail_excludes_completed_trade_array(monkeypatch):
-    completed = _FakeDetailCollection(
+def test_trader_detail_uses_trade_summary(monkeypatch):
+    summary = _FakeDetailCollection(
         {
             "ethAddress": "0x1",
             "total_trades": 120,
@@ -249,8 +267,8 @@ def test_trader_detail_excludes_completed_trade_array(monkeypatch):
     )
     monkeypatch.setattr(
         queries,
-        "web3_hyperliquid_hyper_x_completed_trades_collection",
-        completed,
+        "web3_hyperliquid_hyper_x_trade_summary_collection",
+        summary,
     )
     monkeypatch.setattr(
         queries,
@@ -260,35 +278,37 @@ def test_trader_detail_excludes_completed_trade_array(monkeypatch):
 
     result = asyncio.run(queries.get_trader_detail("0x1"))
 
-    assert completed.last_projection == {"_id": 0, "completed_trades": 0}
-    assert "completed_trades" not in result
+    assert summary.last_projection == {"_id": 0}
     assert result["address_state"]["withdrawable"] == "10"
 
 
-def test_trader_trades_are_loaded_with_mongodb_slice(monkeypatch):
-    completed = _FakeDetailCollection(
-        {
-            "ethAddress": "0x1",
-            "total_trades": 120,
-            "completed_trades": [{"coin": "BTC"}, {"coin": "ETH"}],
-        }
+def test_trader_trades_are_loaded_from_completed_trade_rows(monkeypatch):
+    summary = _FakeDetailCollection({"ethAddress": "0x1", "total_trades": 120})
+    trades = _FakeTradeRowsCollection(
+        [{"coin": "BTC"}, {"coin": "ETH"}],
+        total=120,
+    )
+    monkeypatch.setattr(
+        queries,
+        "web3_hyperliquid_hyper_x_trade_summary_collection",
+        summary,
     )
     monkeypatch.setattr(
         queries,
         "web3_hyperliquid_hyper_x_completed_trades_collection",
-        completed,
+        trades,
     )
 
     result = asyncio.run(
-        queries.list_trader_trades("0x1", page=3, page_size=50)
+        queries.list_trader_trades("0x1", page=1, page_size=50)
     )
 
-    assert completed.last_projection["completed_trades"] == {
-        "$slice": [100, 50]
-    }
+    assert trades.last_match == {"ethAddress": "0x1"}
+    assert trades.last_projection == {"_id": 0}
+    assert trades.last_count_match == {"ethAddress": "0x1"}
     assert result == {
         "items": [{"coin": "BTC"}, {"coin": "ETH"}],
-        "page": 3,
+        "page": 1,
         "page_size": 50,
         "total": 120,
         "pages": 3,

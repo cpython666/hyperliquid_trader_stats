@@ -10,6 +10,7 @@ from hyperliquid_trader_stats.db.collections import (
     web3_hyperliquid_hyper_x_analyze_result_collection,
     web3_hyperliquid_hyper_x_addresses_collection,
     web3_hyperliquid_hyper_x_completed_trades_collection,
+    web3_hyperliquid_hyper_x_trade_summary_collection,
 )
 
 
@@ -21,6 +22,10 @@ SORT_FIELDS = {
     "net_pnl": "completed_trade_pnl.net",
     "pnl": "completed_trade_pnl.pnl",
     "fees": "completed_trade_pnl.fees",
+    "avg_trade_pnl": "completed_trade_pnl.avg_trade_net",
+    "median_trade_pnl": "completed_trade_pnl.median_trade_net",
+    "max_profit_trade": "completed_trade_pnl.max_profit_trade_net",
+    "max_loss_trade": "completed_trade_pnl.max_loss_trade_net",
     "avg_duration": "duration_stats.avg_duration_minutes",
     "updated_at": "updated_at",
     "processed_through": "processedThroughTime",
@@ -210,7 +215,7 @@ def _build_address_first_trader_pipeline(
     item_pipeline: list[dict[str, Any]] = [
         {
             "$lookup": {
-                "from": web3_hyperliquid_hyper_x_completed_trades_collection.name,
+                "from": web3_hyperliquid_hyper_x_trade_summary_collection.name,
                 "localField": "ethAddress",
                 "foreignField": "ethAddress",
                 "pipeline": lookup_pipeline,
@@ -487,7 +492,7 @@ async def _list_traders_by_page_ids(
     skip = (page - 1) * page_size
 
     id_cursor = (
-        web3_hyperliquid_hyper_x_completed_trades_collection.find(
+        web3_hyperliquid_hyper_x_trade_summary_collection.find(
             completed_match,
             {"_id": 0, "ethAddress": 1},
         )
@@ -501,7 +506,7 @@ async def _list_traders_by_page_ids(
 
     if not completed_match:
         count_coro = (
-            web3_hyperliquid_hyper_x_completed_trades_collection.estimated_document_count()
+            web3_hyperliquid_hyper_x_trade_summary_collection.estimated_document_count()
         )
     else:
         count_options = (
@@ -510,7 +515,7 @@ async def _list_traders_by_page_ids(
             else {}
         )
         count_coro = (
-            web3_hyperliquid_hyper_x_completed_trades_collection.count_documents(
+            web3_hyperliquid_hyper_x_trade_summary_collection.count_documents(
                 completed_match,
                 **count_options,
             )
@@ -524,7 +529,7 @@ async def _list_traders_by_page_ids(
         return [], total
 
     completed_coro = (
-        web3_hyperliquid_hyper_x_completed_trades_collection.find(
+        web3_hyperliquid_hyper_x_trade_summary_collection.find(
             {"ethAddress": {"$in": page_addresses}},
             _trader_projection(),
         ).to_list(length=page_size)
@@ -584,7 +589,7 @@ async def _list_traders_by_completed_sort_and_state_filter(
         else address_match
     )
     page_cursor = (
-        web3_hyperliquid_hyper_x_completed_trades_collection.find(
+        web3_hyperliquid_hyper_x_trade_summary_collection.find(
             intersection_match,
             _trader_projection(),
         )
@@ -594,7 +599,7 @@ async def _list_traders_by_completed_sort_and_state_filter(
     )
     completed_rows, total = await asyncio.gather(
         page_cursor.to_list(length=page_size),
-        web3_hyperliquid_hyper_x_completed_trades_collection.count_documents(
+        web3_hyperliquid_hyper_x_trade_summary_collection.count_documents(
             intersection_match
         ),
     )
@@ -668,7 +673,7 @@ async def list_traders(**filters: Any) -> dict[str, Any]:
     aggregate_collection = (
         web3_hyperliquid_hyper_x_addresses_collection
         if sort_by in JOINED_SORT_FIELDS
-        else web3_hyperliquid_hyper_x_completed_trades_collection
+        else web3_hyperliquid_hyper_x_trade_summary_collection
     )
     rows = await aggregate_collection.aggregate(
         pipeline
@@ -687,7 +692,7 @@ async def list_traders(**filters: Any) -> dict[str, Any]:
 async def get_dashboard_summary() -> dict[str, Any]:
     """Return the latest precomputed analysis and index-backed leader data."""
     top_cursor = (
-        web3_hyperliquid_hyper_x_completed_trades_collection.find(
+        web3_hyperliquid_hyper_x_trade_summary_collection.find(
             {},
             {
                 "_id": 0,
@@ -709,7 +714,7 @@ async def get_dashboard_summary() -> dict[str, Any]:
         ),
         top_cursor.to_list(length=6),
         web3_hyperliquid_hyper_x_addresses_collection.estimated_document_count(),
-        web3_hyperliquid_hyper_x_completed_trades_collection.estimated_document_count(),
+        web3_hyperliquid_hyper_x_trade_summary_collection.estimated_document_count(),
     )
 
     analysis = latest_analysis or {}
@@ -728,9 +733,9 @@ async def get_dashboard_summary() -> dict[str, Any]:
 
 
 async def get_trader_detail(address: str) -> Optional[dict[str, Any]]:
-    doc = await web3_hyperliquid_hyper_x_completed_trades_collection.find_one(
+    doc = await web3_hyperliquid_hyper_x_trade_summary_collection.find_one(
         {"ethAddress": address},
-        {"_id": 0, "completed_trades": 0},
+        {"_id": 0},
     )
     if doc is None:
         return None
@@ -752,21 +757,32 @@ async def list_trader_trades(
     page = max(page, 1)
     page_size = min(max(page_size, 1), 200)
     skip = (page - 1) * page_size
-    doc = await web3_hyperliquid_hyper_x_completed_trades_collection.find_one(
+    summary = await web3_hyperliquid_hyper_x_trade_summary_collection.find_one(
         {"ethAddress": address},
-        {
-            "_id": 0,
-            "ethAddress": 1,
-            "total_trades": 1,
-            "completed_trades": {"$slice": [skip, page_size]},
-        },
+        {"_id": 0, "ethAddress": 1, "total_trades": 1},
     )
-    if doc is None:
+    if summary is None:
         return None
 
-    total = int(doc.get("total_trades") or 0)
+    trades_cursor = (
+        web3_hyperliquid_hyper_x_completed_trades_collection.find(
+            {"ethAddress": address},
+            {"_id": 0},
+        )
+        .sort([("end_time_ms", -1), ("coin", 1), ("coin_index", 1)])
+        .skip(skip)
+        .limit(page_size)
+    )
+    trades, total = await asyncio.gather(
+        trades_cursor.to_list(length=page_size),
+        web3_hyperliquid_hyper_x_completed_trades_collection.count_documents(
+            {"ethAddress": address}
+        ),
+    )
+    if not total:
+        total = int(summary.get("total_trades") or 0)
     return {
-        "items": serialize_document(doc.get("completed_trades", [])),
+        "items": serialize_document(trades),
         "page": page,
         "page_size": page_size,
         "total": total,

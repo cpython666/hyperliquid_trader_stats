@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from hyperliquid_trader_stats.db.collections import (
     web3_hyperliquid_hyper_x_addresses_collection,
-    web3_hyperliquid_hyper_x_completed_trades_collection,
+    web3_hyperliquid_hyper_x_trade_summary_collection,
     web3_hyperliquid_hyper_x_analyze_result_collection,
 )
 
@@ -166,7 +166,7 @@ async def analyze_winrate_and_positions():
 
     参数：
         addresses_collection (AsyncIOMotorCollection): 存储地址数据的 MongoDB 集合，默认为 web3_hyperliquid_hyper_x_addresses_collection。
-        trades_collection (AsyncIOMotorCollection): 存储交易数据的 MongoDB 集合，默认为 web3_hyperliquid_hyper_x_completed_trades_collection。
+        trades_collection (AsyncIOMotorCollection): 存储交易数据的 MongoDB 集合，默认为 web3_hyperliquid_hyper_x_trade_summary_collection。
 
     返回：
         dict: 包含以下统计结果的字典：
@@ -192,7 +192,7 @@ async def analyze_winrate_and_positions():
         total_addresses, estimated_analyzed_addresses = await asyncio.gather(
             _estimated_count(web3_hyperliquid_hyper_x_addresses_collection, "总地址数"),
             _estimated_count(
-                web3_hyperliquid_hyper_x_completed_trades_collection,
+                web3_hyperliquid_hyper_x_trade_summary_collection,
                 "已分析交易地址数",
             )
         )
@@ -235,7 +235,7 @@ async def analyze_winrate_and_positions():
         for key in VALUE_KEYS:
             projection[f"entry_value_summary.{key}.win_rate"] = 1
 
-        trades_cursor = web3_hyperliquid_hyper_x_completed_trades_collection.find(
+        trades_cursor = web3_hyperliquid_hyper_x_trade_summary_collection.find(
             {
                 "$or": [
                     {"win_rate": {"$exists": True, "$ne": None}},

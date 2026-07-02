@@ -27,6 +27,7 @@ from hyperliquid_trader_stats.db.collections import (
     web3_hyperliquid_hyper_x_user_fills_collection,
     web3_hyperliquid_hyper_x_user_fills_summary_collection,
     web3_hyperliquid_hyper_x_completed_trades_collection,
+    web3_hyperliquid_hyper_x_trade_summary_collection,
 )
 
 # 配置日志
@@ -49,6 +50,47 @@ def wilson_lower_bound(wins, total, confidence=0.95):
         + z * z / (2 * total)
         - z * math.sqrt((phat * (1 - phat) + z * z / (4 * total)) / total)
     ) / (1 + z * z / total)
+
+
+def _round_money(value: Decimal) -> float:
+    """将金额 Decimal 保留两位小数并转成可 JSON/Mongo 存储的 float。"""
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def calculate_trade_pnl_stats(orders: list[dict]) -> dict[str, float]:
+    """计算单笔净 PnL 统计，用于衡量交易质量。"""
+    trade_net_pnls = [
+        Decimal(str(order.get("net_pnl", 0)))
+        for order in orders
+    ]
+    if not trade_net_pnls:
+        return {
+            "avg_trade_net": 0.0,
+            "median_trade_net": 0.0,
+            "max_profit_trade_net": 0.0,
+            "max_loss_trade_net": 0.0,
+        }
+
+    winning_pnls = [pnl for pnl in trade_net_pnls if pnl > 0]
+    losing_pnls = [pnl for pnl in trade_net_pnls if pnl < 0]
+    return {
+        "avg_trade_net": _round_money(sum(trade_net_pnls) / len(trade_net_pnls)),
+        "median_trade_net": _round_money(statistics.median(trade_net_pnls)),
+        "max_profit_trade_net": _round_money(max(winning_pnls, default=Decimal("0"))),
+        "max_loss_trade_net": _round_money(min(losing_pnls, default=Decimal("0"))),
+    }
+
+
+def _trade_documents(address: str, orders: list[dict], updated_at: datetime) -> list[dict]:
+    """将聚合订单转换为 completed_trades 明细表文档。"""
+    return [
+        {
+            **order,
+            "ethAddress": address,
+            "updated_at": updated_at,
+        }
+        for order in orders
+    ]
 
 
 def merge_and_aggregate(fills, open_position_coins: list = None):
@@ -398,6 +440,7 @@ async def compute_complete_trades_and_store(address: str, store=True):
     )
     total_fees = round(sum(order["fees"] for order in orders), 2)
     net_pnl = round(total_pnl - total_fees, 2)
+    trade_pnl_stats = calculate_trade_pnl_stats(orders)
 
     # 计算 duration_stats
     durations_minutes = [order["duration_ms"] / 60000 for order in orders]  # 毫秒转分钟
@@ -508,16 +551,18 @@ async def compute_complete_trades_and_store(address: str, store=True):
             "wilson_lower_bound": wilson,
         }
 
-    # 构造 data 字典
-    data = {
+    updated_at = datetime.utcnow()
+
+    # 构造 summary 字典：每个地址一条聚合结果
+    summary = {
         "ethAddress": address,
-        "completed_trades": orders,
         "completed_trade_pnl": {
             "pnl": total_pnl,
             "long_pnl": long_pnl,
             "short_pnl": short_pnl,
             "fees": total_fees,
             "net": net_pnl,
+            **trade_pnl_stats,
         },
         "duration_stats": {
             "avg_duration_minutes": avg_duration_minutes,
@@ -535,24 +580,33 @@ async def compute_complete_trades_and_store(address: str, store=True):
         "win_rate_short": win_rate_short,
         "entry_value_summary": entry_value_summary,
         "processedThroughTime": processed_through_time,
-        "updated_at": datetime.utcnow(),
+        "updated_at": updated_at,
     }
+    trade_docs = _trade_documents(address, orders, updated_at)
 
-    # 存储到数据库 (upsert)
+    # 存储到数据库：明细表按地址重建，summary 表按地址 upsert。
     try:
-        result = await web3_hyperliquid_hyper_x_completed_trades_collection.update_one(
-            {"ethAddress": address}, {"$set": data}, upsert=True
+        await web3_hyperliquid_hyper_x_completed_trades_collection.delete_many(
+            {"ethAddress": address}
+        )
+        if trade_docs:
+            await web3_hyperliquid_hyper_x_completed_trades_collection.insert_many(
+                trade_docs,
+                ordered=False,
+            )
+        result = await web3_hyperliquid_hyper_x_trade_summary_collection.update_one(
+            {"ethAddress": address}, {"$set": summary}, upsert=True
         )
         if result.matched_count > 0:
-            logger.info(f"更新了地址 {address} {len(orders)} 条聚合订单数据聚合的结果")
+            logger.info(f"更新了地址 {address} 的交易摘要和 {len(orders)} 条已完成交易")
         else:
-            logger.info(f"插入了地址 {address} {len(orders)} 条聚合订单数据聚合的结果")
+            logger.info(f"插入了地址 {address} 的交易摘要和 {len(orders)} 条已完成交易")
     except Exception as e:
         logger.error(f"❗存储地址 {address} 的数据到数据库时出错: {e}")
         return None
 
     logger.info(f"生成 {len(orders)} 条聚合订单")
-    return data
+    return summary
 
 
 def _datetime_to_milliseconds(value) -> int:
@@ -659,11 +713,11 @@ async def process_all_addresses_incrementally(
             logger.info(f"全量模式：需要处理的地址数: {len(addresses_to_process)}")
         elif cutoff is not None:
             completed_addresses = set(
-                await web3_hyperliquid_hyper_x_completed_trades_collection.distinct(
+                await web3_hyperliquid_hyper_x_trade_summary_collection.distinct(
                     "ethAddress"
                 )
             )
-            stale_cursor = web3_hyperliquid_hyper_x_completed_trades_collection.find(
+            stale_cursor = web3_hyperliquid_hyper_x_trade_summary_collection.find(
                 {
                     "$or": [
                         {"updated_at": {"$lte": cutoff}},
@@ -687,7 +741,7 @@ async def process_all_addresses_incrementally(
             )
         else:
             completed_cursor = (
-                web3_hyperliquid_hyper_x_completed_trades_collection.find(
+                web3_hyperliquid_hyper_x_trade_summary_collection.find(
                     {},
                     {
                         "ethAddress": 1,

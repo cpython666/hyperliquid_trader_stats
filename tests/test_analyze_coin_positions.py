@@ -93,7 +93,7 @@ def test_analysis_adds_only_aggregated_coin_snapshot(monkeypatch):
     )
     monkeypatch.setattr(
         analysis,
-        "web3_hyperliquid_hyper_x_completed_trades_collection",
+        "web3_hyperliquid_hyper_x_trade_summary_collection",
         trades,
     )
 

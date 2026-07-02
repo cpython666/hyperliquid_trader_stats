@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 import logging
 from hyperliquid_trader_stats.db.collections import (
-    web3_hyperliquid_hyper_x_completed_trades_collection,
+    web3_hyperliquid_hyper_x_trade_summary_collection,
     web3_hyperliquid_hyper_x_addresses_collection
 )
 from hyperliquid_trader_stats.hyper_x_utils import bulk_update_user_state
@@ -21,7 +21,7 @@ async def update_high_winrate_positions(
         update_interval_minutes: int = 60,
 ):
     """
-    1) 从 completed_trades 筛出 win_rate >= 阈值 的地址列表
+    1) 从 trade_summary 筛出 win_rate >= 阈值 的地址列表
     2) 在 addresses 表里再次筛选 updatedAt <= interval_ago 或者不存在 updatedAt
     3) 对最终地址列表调用 bulk_update_user_state
     """
@@ -30,7 +30,7 @@ async def update_high_winrate_positions(
     logger.info(f"⏳ 阈值：win_rate >= {win_rate_threshold}，updated_at <= {interval_ago}")
 
     # 第一步：查询所有胜率满足的地址（去重）
-    cursor1 = web3_hyperliquid_hyper_x_completed_trades_collection.find(
+    cursor1 = web3_hyperliquid_hyper_x_trade_summary_collection.find(
         {
             "$or": [
                 {"win_rate": {"$gte": win_rate_threshold}},

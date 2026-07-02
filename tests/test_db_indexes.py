@@ -59,9 +59,27 @@ def test_init_hyper_x_collections_creates_query_indexes(monkeypatch):
         "web3_hyperliquid_hyper_x_completed_trades_collection"
     ].create_index.await_args_list
     assert call(
+        [("ethAddress", ASCENDING), ("coin", ASCENDING), ("coin_index", ASCENDING)],
+        unique=True,
+        name="unique_eth_address_coin_index",
+    ) in completed_trades_calls
+    assert call(
+        [("ethAddress", ASCENDING), ("end_time_ms", DESCENDING)],
+        name="eth_address_end_time_desc",
+    ) in completed_trades_calls
+
+    trade_summary_calls = mocked_collections[
+        "web3_hyperliquid_hyper_x_trade_summary_collection"
+    ].create_index.await_args_list
+    assert call(
         [("updated_at", ASCENDING), ("ethAddress", ASCENDING)],
         name="updated_at_eth_address",
-    ) in completed_trades_calls
+    ) in trade_summary_calls
+    assert call(
+        [("ethAddress", ASCENDING)],
+        unique=True,
+        name="unique_eth_address",
+    ) in trade_summary_calls
     assert call(
         [
             ("total_trades", ASCENDING),
@@ -70,11 +88,27 @@ def test_init_hyper_x_collections_creates_query_indexes(monkeypatch):
             ("ethAddress", ASCENDING),
         ],
         name="total_trades_rank_fields",
-    ) in completed_trades_calls
+    ) in trade_summary_calls
     assert call(
         [("completed_trade_pnl.net", DESCENDING), ("ethAddress", ASCENDING)],
         name="net_pnl_desc_eth_address",
-    ) in completed_trades_calls
+    ) in trade_summary_calls
+    expected_pnl_stat_indexes = {
+        "avg_trade_net_desc_eth_address": "completed_trade_pnl.avg_trade_net",
+        "median_trade_net_desc_eth_address": "completed_trade_pnl.median_trade_net",
+        "max_profit_trade_net_desc_eth_address": (
+            "completed_trade_pnl.max_profit_trade_net"
+        ),
+        "max_loss_trade_net_desc_eth_address": (
+            "completed_trade_pnl.max_loss_trade_net"
+        ),
+    }
+    for index_name, field_name in expected_pnl_stat_indexes.items():
+        assert call(
+            [(field_name, DESCENDING), ("ethAddress", ASCENDING)],
+            name=index_name,
+        ) in trade_summary_calls
+
     expected_win_rate_indexes = {
         "win_rate_desc_eth_address": "win_rate",
         "win_rate_score_desc_eth_address": "win_rate_score",
@@ -95,7 +129,7 @@ def test_init_hyper_x_collections_creates_query_indexes(monkeypatch):
         assert call(
             [(field_name, DESCENDING), ("ethAddress", ASCENDING)],
             name=index_name,
-        ) in completed_trades_calls
+        ) in trade_summary_calls
 
     analyze_result_calls = mocked_collections[
         "web3_hyperliquid_hyper_x_analyze_result_collection"

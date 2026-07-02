@@ -91,32 +91,77 @@ async def init_hyper_x_collections(include_large_indexes: bool = False):
     )
     await _ensure_index(
         web3_hyperliquid_hyper_x_completed_trades_collection,
+        [("ethAddress", ASCENDING), ("coin", ASCENDING), ("coin_index", ASCENDING)],
+        unique=True,
+        name="unique_eth_address_coin_index",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_completed_trades_collection,
+        [("ethAddress", ASCENDING), ("end_time_ms", DESCENDING)],
+        name="eth_address_end_time_desc",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_completed_trades_collection,
+        [("ethAddress", ASCENDING), ("start_time_ms", ASCENDING)],
+        name="eth_address_start_time",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [("ethAddress", ASCENDING)],
         unique=True,
         name="unique_eth_address",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [("updated_at", ASCENDING), ("ethAddress", ASCENDING)],
         name="updated_at_eth_address",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [("win_rate", DESCENDING), ("ethAddress", ASCENDING)],
         name="win_rate_desc_eth_address",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [("win_rate_score", DESCENDING), ("ethAddress", ASCENDING)],
         name="win_rate_score_desc_eth_address",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [("completed_trade_pnl.net", DESCENDING), ("ethAddress", ASCENDING)],
         name="net_pnl_desc_eth_address",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
+        [("completed_trade_pnl.avg_trade_net", DESCENDING), ("ethAddress", ASCENDING)],
+        name="avg_trade_net_desc_eth_address",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_trade_summary_collection,
+        [
+            ("completed_trade_pnl.median_trade_net", DESCENDING),
+            ("ethAddress", ASCENDING),
+        ],
+        name="median_trade_net_desc_eth_address",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_trade_summary_collection,
+        [
+            ("completed_trade_pnl.max_profit_trade_net", DESCENDING),
+            ("ethAddress", ASCENDING),
+        ],
+        name="max_profit_trade_net_desc_eth_address",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_trade_summary_collection,
+        [
+            ("completed_trade_pnl.max_loss_trade_net", DESCENDING),
+            ("ethAddress", ASCENDING),
+        ],
+        name="max_loss_trade_net_desc_eth_address",
+    )
+    await _ensure_index(
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [
             ("total_trades", ASCENDING),
             ("win_rate_score", DESCENDING),
@@ -126,7 +171,7 @@ async def init_hyper_x_collections(include_large_indexes: bool = False):
         name="total_trades_rank_fields",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [
             ("entry_value_summary.win_rate_over_1w.win_rate", DESCENDING),
             ("ethAddress", ASCENDING),
@@ -134,7 +179,7 @@ async def init_hyper_x_collections(include_large_indexes: bool = False):
         name="win_rate_over_1w_desc_eth_address",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [
             ("entry_value_summary.win_rate_over_10w.win_rate", DESCENDING),
             ("ethAddress", ASCENDING),
@@ -142,7 +187,7 @@ async def init_hyper_x_collections(include_large_indexes: bool = False):
         name="win_rate_over_10w_desc_eth_address",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [
             ("entry_value_summary.win_rate_over_100w.win_rate", DESCENDING),
             ("ethAddress", ASCENDING),
@@ -150,18 +195,12 @@ async def init_hyper_x_collections(include_large_indexes: bool = False):
         name="win_rate_over_100w_desc_eth_address",
     )
     await _ensure_index(
-        web3_hyperliquid_hyper_x_completed_trades_collection,
+        web3_hyperliquid_hyper_x_trade_summary_collection,
         [
             ("entry_value_summary.win_rate_over_1000w.win_rate", DESCENDING),
             ("ethAddress", ASCENDING),
         ],
         name="win_rate_over_1000w_desc_eth_address",
-    )
-    await _ensure_index(
-        web3_hyperliquid_hyper_x_trade_summary_collection,
-        [("ethAddress", ASCENDING)],
-        unique=True,
-        name="unique_eth_address",
     )
     await _ensure_index(
         web3_hyperliquid_hyper_x_analyze_result_collection,
