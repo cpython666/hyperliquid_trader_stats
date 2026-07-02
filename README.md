@@ -518,7 +518,4 @@ PYTHONPATH=src python -m hyperliquid_trader_stats.cli --help
 - 金库数据
 
 ## TODO 待办事项
-已完成订单明细写入 `web3_hyperliquid_hyper_x_completed_trades`；地址级聚合结果写入 `web3_hyperliquid_hyper_x_trade_summary`。
-
-平均单笔 PnL，中位数单笔 PnL，最大盈利单，最大亏损单
-在新增个功能就是：对每个地址的余额和持仓信息做快照，这样后续也可以知道这个地址在这个时间点的持仓和杠杆大小的信息
+- 对每个地址的余额和持仓信息做快照，这样后续也可以知道这个地址在这个时间点的持仓和杠杆大小的信息。
