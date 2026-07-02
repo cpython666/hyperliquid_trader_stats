@@ -482,9 +482,23 @@ PYTHONPATH=src python -m hyperliquid_trader_stats.cli --help
 
 ### 从金库获取地址
 
-`services/vaults/fetch_and_store_vaults_list.py`
-`services/vaults/fetch_and_store_vaults_info.py`
-`services/add_addresses_from_vaults.py`
+```bash
+# 采集金库列表
+hyper-stats fetch-vaults-list
+
+# 采集金库详情和 followers，默认只采集缺少详情的前 100 个 TVL 最高金库
+hyper-stats fetch-vaults-info
+
+# 从已采集的金库 followers 中提取用户地址，写入统一地址表
+hyper-stats add-addresses-from-vaults
+```
+
+金库详情采集支持按需调整：
+
+```bash
+hyper-stats fetch-vaults-info --top-n 1000 --sort-by tvl --no-only-missing-details
+hyper-stats fetch-vaults-info --top-n 1000 --sort-by profit
+```
 
 | 脚本                          | 作用                         | 完成 |
 | ----------------------------- | ---------------------------- | ---- |
@@ -519,3 +533,4 @@ PYTHONPATH=src python -m hyperliquid_trader_stats.cli --help
 
 ## TODO 待办事项
 - 对每个地址的余额和持仓信息做快照，这样后续也可以知道这个地址在这个时间点的持仓和杠杆大小的信息。
+- web3_hyperliquid_hyper_x_user_fills表有点大，需要找到方案优化

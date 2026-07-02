@@ -123,6 +123,9 @@ def test_cli_exposes_expected_commands():
     assert {
         "init-db",
         "fetch-leaderboard",
+        "fetch-vaults-list",
+        "fetch-vaults-info",
+        "add-addresses-from-vaults",
         "fetch-user-states",
         "fetch-user-fills",
         "compute-trades",
@@ -158,6 +161,35 @@ def test_cli_parses_fetch_block_addresses_requests_backend():
 
     assert args.requests is True
     assert args.concurrency == 3
+
+
+def test_cli_parses_fetch_vaults_info_defaults():
+    parser = build_parser()
+
+    args = parser.parse_args(["fetch-vaults-info"])
+
+    assert args.top_n == 100
+    assert args.sort_by == "tvl"
+    assert args.only_missing_details is True
+
+
+def test_cli_parses_fetch_vaults_info_options():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "fetch-vaults-info",
+            "--top-n",
+            "500",
+            "--sort-by",
+            "profit",
+            "--no-only-missing-details",
+        ]
+    )
+
+    assert args.top_n == 500
+    assert args.sort_by == "profit"
+    assert args.only_missing_details is False
 
 
 def test_cli_parses_analyze_history_defaults():

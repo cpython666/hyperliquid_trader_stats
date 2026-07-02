@@ -94,6 +94,37 @@ async def fetch_block_addresses_command(args):
     )
 
 
+async def fetch_vaults_list_command(_args):
+    """采集金库列表并写入 MongoDB。"""
+    from hyperliquid_trader_stats.services.vaults.fetch_and_store_vaults_list import (
+        main,
+    )
+
+    await main()
+
+
+async def fetch_vaults_info_command(args):
+    """采集金库详情并写入 MongoDB。"""
+    from hyperliquid_trader_stats.services.vaults.fetch_and_store_vaults_info import (
+        main,
+    )
+
+    await main(
+        top_n=args.top_n,
+        sort_by=args.sort_by,
+        only_missing_details=args.only_missing_details,
+    )
+
+
+async def add_addresses_from_vaults_command(_args):
+    """从金库 followers 中提取用户地址并写入地址表。"""
+    from hyperliquid_trader_stats.services.add_addresses_from_vaults import (
+        add_addresses_from_vaults,
+    )
+
+    await add_addresses_from_vaults()
+
+
 async def fetch_user_states_command(args):
     """执行用户持仓状态采集命令。"""
     from hyperliquid_trader_stats.services.fetch_and_store_user_state import main
@@ -273,6 +304,45 @@ def build_parser():
         help="并发请求数量；默认 aiohttp 为 5，requests 为 10。",
     )
     block_addresses.set_defaults(handler=fetch_block_addresses_command)
+
+    vaults_list = subparsers.add_parser(
+        "fetch-vaults-list",
+        help="采集金库列表。",
+        description="请求 Hyperliquid 金库排行榜接口，并将金库基础信息写入 MongoDB。",
+    )
+    vaults_list.set_defaults(handler=fetch_vaults_list_command)
+
+    vaults_info = subparsers.add_parser(
+        "fetch-vaults-info",
+        help="采集金库详情。",
+        description="读取已保存的金库列表，按 TVL 或收益排序后采集详情和 followers 等数据。",
+    )
+    vaults_info.add_argument(
+        "--top-n",
+        type=positive_int,
+        default=100,
+        help="最多处理的金库数量，默认 100。",
+    )
+    vaults_info.add_argument(
+        "--sort-by",
+        choices=["tvl", "profit"],
+        default="tvl",
+        help="金库排序字段，默认 tvl。",
+    )
+    vaults_info.add_argument(
+        "--only-missing-details",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="仅采集缺少详情的金库；使用 --no-only-missing-details 可刷新全部候选金库。",
+    )
+    vaults_info.set_defaults(handler=fetch_vaults_info_command)
+
+    vault_addresses = subparsers.add_parser(
+        "add-addresses-from-vaults",
+        help="从金库 followers 导入地址。",
+        description="从 web3_hyperliquid_vaults 的 followers 中提取用户地址，写入统一地址表。",
+    )
+    vault_addresses.set_defaults(handler=add_addresses_from_vaults_command)
 
     states = subparsers.add_parser(
         "fetch-user-states",
