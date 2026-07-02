@@ -172,7 +172,7 @@ hyper-stats fetch-block-addresses 651879309
 默认使用 aiohttp 后端，并发数为 5：
 
 ```bash
-hyper-stats fetch-block-addresses 651879309 --block-count 1000
+hyper-stats fetch-block-addresses 631879309 --block-count 10000
 ```
 
 如果 aiohttp 方式遇到网络兼容问题，可以切到 requests 后端；requests 后端默认并发数为 10，也可以手动调小：
@@ -302,7 +302,7 @@ hyper-stats compute-trades
 
 | 参数 | 作用 |
 | ---- | ---- |
-| `--incremental` | 根据 `fills_summary.lastTime` 和 `completed_trades.processedThroughTime` 只计算有新成交或尚未生成结果的地址。这是默认模式，可以省略。 |
+| `--incremental` | 根据 `fills_summary.lastTime` 和 `trade_summary.processedThroughTime` 只计算有新成交或尚未生成结果的地址。这是默认模式，可以省略。 |
 | `--no-incremental` | 重新计算 fills 集合中的全部地址，适合计算逻辑变更后刷新历史结果；数据量较大时会耗费更长时间。 |
 | `--stale-days 7` | 重新计算超过指定天数未更新以及尚未生成结果的地址。 |
 | `--updated-before 2026-06-01` | 重新计算指定 UTC 日期之前更新以及尚未生成结果的地址，日期格式为 `YYYY-MM-DD`。 |
@@ -375,6 +375,58 @@ hyper-stats analyze-ls-rate --basic --no-store-result --visualize-result
 | `--visualize-result` | 生成分析结果图表；默认不生成。 |
 | `--store-result` / `--no-store-result` | 是否将分析结果写入 MongoDB，默认写入。 |
 | `--basic` | 使用不按入场价值区间细分的基础分析器；默认使用进阶分析器。基础分析器输出多张单项 PNG，进阶分析器输出一张合并 PNG。 |
+
+### 可视化币种多空价值比
+
+该命令读取 `web3_hyperliquid_hyper_x_analyze_result` 中某一次分析快照的
+`coin_position_distribution`，按币种展示多空价值比：
+
+```text
+多空价值比 = long_value_sum / abs(short_value_sum)
+```
+
+默认读取 `timestamp` 最新的一条快照，并按 `ge_50`（胜率 ≥50）门槛下的仓位价值合计排序：
+
+```text
+排序值 = ge_50.long_value_sum + abs(ge_50.short_value_sum)
+```
+
+图表展示的仍然是原始多空价值比，同一个币种下展示多个胜率门槛的柱状图，方便观察当前高胜率地址更偏多哪些币种。
+如果某个币种在某个胜率门槛下只有多头、没有空头，多空价值比会显示为 `∞`，图中用有限长度和虚线标记表示，避免把整张图撑爆。
+
+```bash
+cd /Users/cpython666/git_pro/hyperliquid-trader-stats
+hyper-stats visualize-coin-value-ratio --no-show
+```
+
+常用运行方式：
+
+```bash
+# 最新快照，按 ge_50 仓位价值合计排序，保存前 30 个币种到 plots_tmp
+hyper-stats visualize-coin-value-ratio --no-show
+
+# 最新快照，按 ge_50 仓位价值合计排序，展示前 50 个币种
+hyper-stats visualize-coin-value-ratio --top 50 --no-show
+
+# 指定 analyze_result 文档 _id
+hyper-stats visualize-coin-value-ratio --analysis-id 686694116fc51490b88ff79f --no-show
+
+# 指定单个胜率门槛；指定后按该门槛的多空价值比排序，并全量展示该门槛下的币种
+hyper-stats visualize-coin-value-ratio --winrate-key ge_90 --no-show
+
+# 指定输出目录
+hyper-stats visualize-coin-value-ratio --output-dir coin_plots --no-show
+```
+
+参数说明：
+
+| 参数 | 作用 |
+| ---- | ---- |
+| `--analysis-id 686...` | 可选，指定 `web3_hyperliquid_hyper_x_analyze_result` 的 `_id`；不传则使用最新快照。 |
+| `--winrate-key ge_90` | 可选，指定单个胜率门槛，按该门槛的多空价值比排序并全量展示；可选 `ge_50/ge_60/ge_70/ge_80/ge_90/eq_100`。不传则按 `ge_50` 仓位价值合计排序并展示分组柱状图。 |
+| `--top 30` | 默认分组模式下最多展示的币种数量，默认 `30`。指定 `--winrate-key` 时会展示该门槛下全部币种。 |
+| `--output-dir plots_tmp` | PNG 保存目录；传空字符串可关闭保存，默认 `plots_tmp`。 |
+| `--show` / `--no-show` | 是否显示 Matplotlib 窗口；服务器或后台运行建议使用 `--no-show`。 |
 
 ### 启动 Web 数据筛选页面
 
@@ -466,4 +518,7 @@ PYTHONPATH=src python -m hyperliquid_trader_stats.cli --help
 - 金库数据
 
 ## TODO 待办事项
-实现已完成订单中间表而不是每次实时计算，实时计算会导致重新拉取新订单耗时，有速率限制【但是计算已完成订单需要去掉最后一单】
+已完成订单明细写入 `web3_hyperliquid_hyper_x_completed_trades`；地址级聚合结果写入 `web3_hyperliquid_hyper_x_trade_summary`。
+
+平均单笔 PnL，中位数单笔 PnL，最大盈利单，最大亏损单
+在新增个功能就是：对每个地址的余额和持仓信息做快照，这样后续也可以知道这个地址在这个时间点的持仓和杠杆大小的信息
